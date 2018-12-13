@@ -1,7 +1,12 @@
-/* Copyright (c) Colorado School of Mines, 2011.*/
-/* All rights reserved.		       */
-
-/* SUKTMIG2D: $Revision: 1.7 $ ; $Date: 2013/08/14 18:34:35 $*/
+/* Copyright (c) Chinese Academy of Science, Guiting Chen */
+/* All rights reserved.		                              */
+/*A demo of 3D RTM with GPU accelaration, the input  
+  data file is SU format, so you must set the keyword sx,sy,gx,gy.
+  This program can automatically malloc the grid size of model based
+  on the shot and receiver poisitions with a rectangle area.
+  The output file is also a SU format file with one by one shots imaging area, 
+  I suggest you stacking this SU file to get a final imaging lines. */
+/*                                                        */
 
 #include "su.h"
 #include "segy.h"
@@ -1041,7 +1046,7 @@ main(int argc, char **argv)
 	FILE *hfp = NULL;		/* temp file to hold trace headers */
 	initargs(argc, argv);
 	requestdoc(0);
-
+	hfp = etmpfile();
 	bool verb;
 	int nz, nx, ny, nb, nbr, nzb, nxb, nyb, nnz, nnx, nny, ns = 0, ng = 0, nt, kt, it, is, szbeg, sxbeg, sybeg, jsz, jsx, jsy, N, il, igg, i_sx, i_sy, i_x, i_y, iline;
 	int *d_szxy, *d_gzxy;
@@ -1216,8 +1221,8 @@ main(int argc, char **argv)
 				memset(dobs, 0, nt*ng * sizeof(float));
 				matrix_transpose(trace, dobs, nt, ng);
 
-				nx = (maxx-minx) / ddx;
-				ny = (maxy -miny) / ddy;
+				nx = ((maxx-x_beg) / ddx) - ((minx - x_beg) / ddx);
+				ny = ((maxy - y_beg) / ddy) - ((miny - y_beg) / ddy);
 				warn("Migration shot=%d, ng=%d nx=%d, ny=%d\n ", ns, ng, nx,ny);
 				xr0 = minx;
 				yr0 = miny;
@@ -1310,16 +1315,16 @@ main(int argc, char **argv)
 				//////////////////////////////////////////////////////////////////////////////
 				cudaEventRecord(start);
 				fseek(fp_disk, 0, SEEK_SET);
-				i_x = ((minx - x0) / ddx);
-				i_y = ((miny - y0) / ddy);
+				i_x = ((minx - x_beg) / ddx);    // i_x is related to local velocity model
+				i_y = ((miny - y_beg) / ddy);
 				mig = i_x*nz*ncdp + i_y*nz;
-				for (i = 0; i < nx; i++)
-					for (j = 0; j < ny; j++)
+				for (i = 0; i < ny; i++)
+					for (j = 0; j < nx; j++)
 						for (k = 0; k < nz; k++)
 						{
 							//v0[k + j*nz + i*nz*nx] = vr[mig + k + j*nzr + i*nzr*nxr];
 							//v0[k + j*nz + i*nz*nx]=2000+k*10;
-							v0[k + i*nz + j*nz*nline] = 2500 + k * 10;
+							v0[k + j*nz + i*nz*nx] = 2500 + k * 10;
 							// if( k>170)   v0[k + j*nz + i*nz*nx]=4500;
 						}
 				extend3d(v0, vv, nz, nx, ny, nb);
@@ -1327,12 +1332,12 @@ main(int argc, char **argv)
 				cudaMemcpy(d_vv, vv, nnz*nnx*nny * sizeof(float), cudaMemcpyHostToDevice);
 				for (ig = 0; ig < ng; ig++)
 				{
-					index_gx = (trace_gxy[2 * ig] - xr0) / ddx;
-					index_gy = (trace_gxy[2 * ig + 1] - yr0) / ddy;
+					index_gx = (trace_gxy[2 * ig] - x_beg) / ddx-i_x;
+					index_gy = (trace_gxy[2 * ig + 1] - y_beg) / ddy-i_y;
 					index_gz = 2;
 					cuda_set_gzxy << <1, 1 >> >(d_gzxy, index_gz, index_gx, index_gy, ig, nz, nx, ny, nb);
-					index_sx = (oldsx - xr0) / ddx;
-					index_sy = (oldsy - yr0) / ddy;
+					index_sx = (oldsx - x_beg) / ddx-i_x;
+					index_sy = (oldsy - y_beg) / ddy-i_y;
 					index_sz = 1
 						//index_sx = 150;
 						//index_sy = 150;
@@ -1483,14 +1488,18 @@ main(int argc, char **argv)
 				for(i=0;i<nx;i++)
 					for (j = 0; j < ny; j++)
 					{
-
-						outtrace.sx = xr0 + i*dx;
-						outtrace.sy = yr0 + j*dx;
-						outtrace.cdp = (yr0 + j*dx-y_beg)/ddy;
-						outtrace.fldr = (xr0 + i*dx - x_beg) / ddx;
+						erewind(hfp);
+						intrace.ns = nz;
+						efwrite(&intrace, HDRBYTES, 1, hfp);
+						erewind(hfp);
+						efwrite(&outtrace, HDRBYTES, 1, hfp);
+						outtrace.sx = minx + i*dx;
+						outtrace.sy = miny + j*dx;
+						outtrace.cdp = (miny + j*dx-y_beg)/ddy;
+						outtrace.fldr = (minx+ i*dx - x_beg) / ddx;
 						for (k = 0; k < nz; k++)
 						{
-							outtrace.data[k] = v0[k + j*nz*nx + i + nz];
+							outtrace.data[k] = v0[k + j*nz*nx + i * nz];
 							
 						}
 					
