@@ -1,19 +1,28 @@
-/* 3D  reverse time migration with efficient  boundary
+/* Copyright (c) Colorado School of Mines, 2011.*/
+/* All rights reserved.		       */
 
+/* SUKTMIG2D: $Revision: 1.7 $ ; $Date: 2013/08/14 18:34:35 $*/
 
-*/
-
-#include <stdio.h>
-#include <stdlib.h>
+#include "su.h"
+#include "segy.h"
+#include "header.h"
+#include "stdio.h"
+#include "stdlib.h"
+#include "math.h"
 #include <string.h>
 #include <math.h>
 #include <time.h>
 #include <cuda_runtime.h>
+/*********************** self documentation **********************/
+char *sdoc[] = {
+	" 								",
+	" 3D reverse time migration with high performance GPU acceleration	",
+	"	Author: Guiting Chen, Chinese Academy of Science,2018.12.09	",
+	"								",
+	NULL };
 
-//extern "C" {
-//#include <rsf.h>
-//}
-
+#define LOOKFAC 2       /* Look ahead factor for npfaro   */
+#define PFA_MAX 720720  /* Largest allowed nfft	   */
 #ifndef PI
 #define PI 	3.1415926535
 #endif
@@ -31,7 +40,7 @@ void sf_check_gpu_error(const char *msg)
 {
 	cudaError_t err = cudaGetLastError();
 	if (cudaSuccess != err) {
-		printf("Cuda error: %s: %s", msg, cudaGetErrorString(err));
+		warn("Cuda error: %s: %s", msg, cudaGetErrorString(err));
 		exit(0);
 	}
 }
@@ -79,7 +88,6 @@ __global__ void cuda_set_ss(int *szxy, int ns_x, int ns_y, int szbeg, int sxbeg,
 
 
 }
-
 
 
 __global__ void cuda_add_source(bool add, float *p, float *source, int *szxy, int ns)
@@ -1015,466 +1023,550 @@ void matrix_transpose(float *matrix, float *trans, int n1, int n2)
 }
 
 
-int main(int argc, char* argv[])
+
+
+/* Prototype of functions used internally */
+
+segy intrace; 	/* input traces */
+segy outtrace;	/* migrated output traces */
+
+int
+main(int argc, char **argv)
 {
+	cudaEvent_t start, stop;
+	float mstimer;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+	FILE *tracefp = NULL;	/* temp file to hold traces*/
+	FILE *hfp = NULL;		/* temp file to hold trace headers */
+	initargs(argc, argv);
+	requestdoc(0);
+
 	bool verb;
-	int nz, nx, ny, nb, nbr, nzb, nxb, nyb, nnz, nnx, nny, ns, nt, kt, it, is, szbeg, sxbeg, sybeg, jsz, jsx, jsy, N,il,igg,i_sx,i_sy,iline;
+	int nz, nx, ny, nb, nbr, nzb, nxb, nyb, nnz, nnx, nny, ns = 0, ng = 0, nt, kt, it, is, szbeg, sxbeg, sybeg, jsz, jsx, jsy, N, il, igg, i_sx, i_sy, i_x, i_y, iline;
 	int *d_szxy, *d_gzxy;
 	float dz, dx, dy, fm, dt, _dz2, _dx2, _dy2;
+	int ddz, ddx, ddy;
 	float *v0, *vv, *d_wlt, *d_vv, *d_abc, *d_p0, *d_p1, *d_gp0, *d_gp1, *ptr, *d_dobs, *dobs, *transp;;
 	float *d_Isg, *d_Iss, *d_I1, *d_I2;
 	float 	*h_boundary, *d_boundary;    /* boundary on host and device */
-	int ng, ktt;
-        float vmute;
+	int  ktt, i, j, k;
+	int x_beg, y_beg;
+	int start_line;
+	int line_range;
+	int ncdp;
+	int ninline;
+	int x0, y0,x1,y1,xd,xr0,yr0;
 
-
-	nz = 187;
-	nx = 801;
-	ny = 100;
-
-        int nline = 1;
-        int line_ng = 800;
-        int dg_y = 1;
-        int dg_x = 1;
-        int gx_beg=0;
-        int gy_beg=50;
-
-        int ns_x = 1;
-        int ns_y = 1;
-        int sx_beg=350;
-        int sy_beg=50;  
-        int ds_x = 25;   
-	int ds_y = 10;
-
- 
-
-
-        ns= 1;
-
-
-
-
-
-	ng = line_ng*nline;
- 
- 
-	dz = 15;
-	dx = 15;
-	dy = 15;
-	nb = 35;
-	nt = 3000;
-	ktt = 399;
-	kt = 20;
-	dt = 0.001;
-	fm = 25;
-
-
-	szbeg = 0;
-	sxbeg = 30;
-	sybeg = 3;
-	jsz = 1;
-	jsx = 28;
-	jsy = 4;
-
-
-	_dz2 = 1.0 / (dz*dz);
-	_dx2 = 1.0 / (dx*dx);
-	_dy2 = 1.0 / (dy*dy);
-	nbr = nb + radius;
-	nzb = nz + 2 * nb;
-	nxb = nx + 2 * nb;
-	nyb = ny + 2 * nb;
-	nnz = nz + 2 * nbr;
-	nnx = nx + 2 * nbr;
-	nny = ny + 2 * nbr;
-	N = nnx*nny*nnz;
-
-	v0 = (float*)malloc(nz*nx*ny * sizeof(float));
-	vv = (float*)malloc(nnz*nnx*nny * sizeof(float));
-	memset(v0, 0, nx*ny*nz * sizeof(float));
-	memset(vv, 0, nnx*nny*nnz * sizeof(float));
-	dobs = (float*)malloc(nt*ng * sizeof(float));
-	transp = (float*)malloc(nt*ng * sizeof(float));
-	memset(dobs, 0, nt*ng * sizeof(float));
-	memset(transp, 0, nt*ng * sizeof(float));
-	//sf_floatread(v0, nz*nx*ny, Fv);// read velocity model v0
-	FILE *fp_v, *fp_v2;
-	float *vr;
+	int id;
 	int nxr, nyr, nzr;
-	nxr = 801;
-	nyr = 801;
-	nzr = 187;
-	vr = (float*)malloc(nzr*nxr*nyr*sizeof(float));
-	fp_v = fopen("overthrust_zxy.bin", "rb");
-	fp_v2 = fopen("v.bin", "wb");
-	fread(vr, sizeof(float), nzr*nxr*nyr, fp_v);
-	int i, j, k;
-
-
-
-
-	//extend3d(v0, vv, nz, nx, ny, nb);
-	//fwrite(v0, sizeof(float), nx*nz*ny, fp_v2);
-	//random_boundary(v0, vv, nz, nx, ny, nb);
-	//velocity_transform(v0, vv, dt, dz, dx, dy, nz, nx, ny, nb);
-	sf_check_gpu_error("Failed to allocate required memory!");
-	cudaSetDevice(0);// initialize device, default device=0;
-					 //sf_check_gpu_error("Failed to initialize device!");
-
-	dim3 dimg, dimb;
-	dimg.x = (nzb + BlockSize1 - 1) / BlockSize1;
-	dimg.y = (nxb + BlockSize2 - 1) / BlockSize2;
-	dimb.x = BlockSize1;
-	dimb.y = BlockSize2;
-
-
-	dim3 dimgtb, dimglr, dimgfr;
-	dimgtb.x = (nnx + BlockSize1 - 1) / BlockSize1;
-	dimgtb.y = (nny + BlockSize2 - 1) / BlockSize2;
-
-	dimglr.x = (nnz + BlockSize1 - 1) / BlockSize1;
-	dimglr.y = (nny + BlockSize2 - 1) / BlockSize2;
-
-	dimgfr.x = (nnz + BlockSize1 - 1) / BlockSize1;
-	dimgfr.y = (nnx + BlockSize2 - 1) / BlockSize2;
-
-	dim3 dimgtb2, dimglr2, dimgfr2;
-	dimgtb2.x = (nx + BlockSize1 - 1) / BlockSize1;
-	dimgtb2.y = (ny + BlockSize2 - 1) / BlockSize2;
-
-	dimglr2.x = (nz + BlockSize1 - 1) / BlockSize1;
-	dimglr2.y = (ny + BlockSize2 - 1) / BlockSize2;
-
-	dimgfr2.x = (nz + BlockSize1 - 1) / BlockSize1;
-	dimgfr2.y = (nx + BlockSize2 - 1) / BlockSize2;
-
-	/* allocate memory on device */
-	cudaMalloc(&d_abc, nbr * sizeof(float));
-	cudaMalloc(&d_wlt, nt * sizeof(float));
-	cudaMalloc(&d_vv, nnz*nnx*nny * sizeof(float));
-	cudaMalloc(&d_p0, nnz*nnx*nny * sizeof(float));
-	cudaMalloc(&d_p1, nnz*nnx*nny * sizeof(float));
-	cudaMalloc(&d_gp0, nnz*nnx*nny * sizeof(float));
-	cudaMalloc(&d_gp1, nnz*nnx*nny * sizeof(float));
-	cudaMalloc(&d_Iss, N * sizeof(float));
-	cudaMalloc(&d_Isg, N * sizeof(float));
-	cudaMalloc(&d_I1, N * sizeof(float));
-	cudaMalloc(&d_I2, N * sizeof(float));
-	cudaMalloc(&d_dobs, ng * sizeof(float));
-	cudaMalloc(&d_szxy, ns * sizeof(int));
-	cudaMalloc(&d_gzxy, ng * sizeof(int));
-
-	int nt_h, nt_d, nt_disk, ig, length;
-	float dis1;
+	int mig;
+	float vmute;
+	int  nss = 0;
+	int nt_h, nt_d, nt_disk, ig;
 	int index_sz, index_sy, index_sx, index_gz, index_gy, index_gx;
-	float m_boundary = 2.0 * (nx*ny + nx*nz + ny*nz) * 4;
+	float m_boundary;
 	float 	*disk_boundary;
-	int *nsg, *nss;
 	float k1, k2;
-	float vnute;
-	int flagk = 0;
-	//cudaMalloc(&nss, N * sizeof(float));
-	//cudaMalloc(&nsg, N * sizeof(float));
-	//cudaMemset(nss, 0, N * sizeof(float));
-	//cudaMemset(nsg, 0, N * sizeof(float));
-	FILE  *fp_disk;
-	FILE *fp_data;
-	//fp_data = fopen("obs.bin", "rb");
+	int im;
+	FILE  *fp_disk;   //save boundary
 	fp_disk = fopen("boundary.bin", "wb");
 
 
 
-	nt_d = int(0 * 1024 * 1024 * 1024 / m_boundary);
-	nt_h = int(20.0 * 1024 * 1024 * 1024 / m_boundary);
-	if (nt_d > nt)
-	{
-		nt_d = nt;
-		nt_h = 0;
-		nt_disk = 0;
-	}
-	if (nt_d<nt && nt_d + nt_h >nt)
-	{
-		nt_h = nt - nt_d;
-		nt_disk = 0;
-
-	}
-	if (nt_d<nt && nt_d + nt_h <nt)
-	{
-
-		nt_disk = nt - nt_d - nt_h;
-
-	}
-	printf("nt=%d nt_d=%d nt_h=%d nt_disk=%d nt_all=%d \n", nt, nt_d, nt_h, nt_disk, nt_d + nt_h + nt_disk);
-
-
-	cudaHostAlloc(&h_boundary, nt_h * 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float), cudaHostAllocMapped);
-	cudaHostAlloc(&disk_boundary, 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float), cudaHostAllocMapped);
-	cudaMalloc(&d_boundary, (nt_d) * 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float));
-	cudaMemset(h_boundary, 0, nt_h * 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float));
-	cudaMemset(d_boundary, 0, (nt_d) * 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float));
-	cudaMemset(disk_boundary, 0, 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float));
-	cudaMemset(d_I1, 0, N * sizeof(float));
-	cudaMemset(d_I2, 0, N * sizeof(float));
-	sf_check_gpu_error("Failed to allocate memory for variables!");
-
-	cuda_ricker_wavelet << <(nt + 511) / 512, 512 >> >(d_wlt, fm, dt, nt);
-	//cudaMemcpy(d_vv, vv, nnz*nnx*nny * sizeof(float), cudaMemcpyHostToDevice);
-	//cuda_set_sg << <1, ns >> >(d_szxy, szbeg, sxbeg, sybeg, jsz, jsx, jsy, ns, nz, nx, nb);
-	//cuda_set_ss(int *szxy, int ns_x, int ns_y, int szbeg, int sxbeg, int sybeg, int jsx, int jsy, int ns, int nz, int nx, int nb)
-
-	//cuda_set_ss << <1, 1 >> >(d_szxy, ns_x,  ns_y, szbeg, sxbeg, sybeg, jsx, jsy,  ns, nz, nx, nb);
-	//cuda_set_gg << <dimgtb2, dimb >> >(d_gzxy, ng, nz, nx, ny, nb);
-	//for(i=0;i<ng;i++)
-	//cuda_set_gzxy << <1, 1 >> >(d_gzxy, 34+i, 330, 3, i, nz, nx, ny, nb);
-	cuda_abc << <nbr + 15, 16 >> >(d_abc, nbr);
-
-	float mstimer;
-	cudaEvent_t start, stop;
-	cudaEventCreate(&start);
-	cudaEventCreate(&stop);
-
-	FILE *fp_p, *fp_c, *fp_b, *fp_r, *fp_i1, *fp_i2;
+	char *vfile = "";/* name of velocity file */
+	FILE *vfp = NULL;
+	MUSTGETPARSTRING("vfile", &vfile);
+	int sx, sy, sz, gx, gy, gz;
+	int oldsx, oldsy, oldsz, oldgx, oldgy, oldgz;
+	float offset;
+	int maxx = -1000, minx = 10000000, maxy = -1000, miny = 10000000;
+	FILE *fp_p, *fp_r, *fp_i1, *fp_i2;
 	fp_p = fopen("p.bin", "wb");
-	fp_c = fopen("c.bin", "wb");
-	fp_b = fopen("b.bin", "wb");
-	fp_r = fopen("r.bin", "wb");
 	fp_i1 = fopen("I1.bin", "wb");
-	fp_i2 = fopen("I2.bin", "wb");
-	double ntr = nt / 1024;
-	double memory_boundary = 2 * (nx*ny + ny*nz + nz*nx) * 4 / 1024 / 1024;
-	float memory_record = (nx*ny) * 4 * nt / 1024 / 1024;
-	printf("ng=%d ns=%d nb=%d  record= %f \n", ng, ns, nb, memory_record);
+	fp_r = fopen("r.bin", "wb");  
+	fp_i2 = fopen("pp.bin", "wb");
+	/* Hook up getpar to handle the parameters */
+
+
+	/* Get info from first trace */
+	if (!gettr(&intrace))  err("can't get first trace");
+
+	if (!getparint("x_beg", &x_beg)) err("can't get x_beg");
+	if (!getparint("y_beg", &y_beg)) err("can't get y_beg");
+	if (!getparint("nss", &nss)) err("can't get nss");
+	if (!getparint("nb", &nb)) err("can't get nb");
+	if (!getparint("id", &id)) err("can't get device id");
+	if (!getparint("dx", &ddx)) err("can't get ddx");  // must be type of int
+	if (!getparint("dy", &ddy)) err("can't get ddy");
+	if (!getparint("dz", &ddz)) err("can't get ddz");
+	if (!getparfloat("fm", &fm)) err("can't get fm");
+	//if (!getparint("nxr", &nxr)) err("can't get nxr");
+	//if (!getparint("nyr", &nyr)) err("can't get nyr");
+	//if (!getparint("nzr", &nzr)) err("can't get nzr");
+	if (!getparint("ncdp", &ncdp)) err("can't get ncdp");
+	if (!getparint("ninline", &ninline)) err("can't get ninline");
+	if (!getparint("line_range", &line_range)) err("can't get ine_range");
+	if (!getparint("start_line", &start_line)) err("can't get start_line");
+	x0 = x_beg + (start_line-1-line_range)*dx;
+	if ((start_line - line_range) < 0) x0 = x_beg;
+	y0 = y_beg;
+	x1 = x0 + 2 * line_range*dx;
+	y1 = y_beg + （ncdp - 1）*dy;
+	xd = x_beg + (start_line - 1)*dx;
+
+
+	dx = 1.0 * ddx;
+	dy = 1.0 * ddy;
+	dz = 1.0 * ddz;
+	nt = intrace.ns;
+	dt = intrace.dt;
+	dt = dt / 1000000;
+	dt = 0.001;
+	nz = nzr;
+	/* Store traces in tmpfile while getting a count of number of traces */
+	_dz2 = 1.0 / (dz*dz);
+	_dx2 = 1.0 / (dx*dx);
+	_dy2 = 1.0 / (dy*dy);
+	nbr = nb + radius;
+
+
+	float *vr;
+	vr = (float*)malloc(nzr*nxr*nyr * sizeof(float));
+	vfp = fopen(vfile, "rb");
+	fread(vr, sizeof(float), nzr*nxr*nyr, vfp);
+
+	sf_check_gpu_error("Failed to initialize device before allocating !");
+	cudaSetDevice(id);// initialize device, default device=0;
+	sf_check_gpu_error("Failed to initialize device!");
+	dim3 dimg, dimb;
+	dim3 dimgtb, dimglr, dimgfr;
+	dim3 dimgtb2, dimglr2, dimgfr2;
 
 
 
 
 
-        i_sy=0;
-        i_sx=0;
-	for (is = 0; is<ns; is++) {
 
 
+	float *trace;
+	int *trace_gxy;
+	int ntr = 5000;
+	//tracet = (float*)malloc(nt*2000 *sizeof(float));
+	trace = alloc1float(nt*ntr);
+	trace_gxy = (int*)malloc(2 * ntr * sizeof(int));
+	memset(trace, 0, nt*ntr * sizeof(float));
+	memset(trace_gxy, 0, 2 * ntr * sizeof(int));
 
+	oldsx = intrace.sx;
+	oldsy = intrace.sy;
+	minx = oldsx;
+	maxx = oldsx;
+	miny = oldsy;
+	maxy = oldsy;
 
-		cudaEventRecord(start);
-		fseek(fp_disk, 0, SEEK_SET);
-                if( is % ns_x ==0)
-                {
-                   for (i = 0; i < ny; i++)
-			for (j = 0; j < nx; j++)
-				for (k = 0; k < nz; k++)
+	if (intrace.sx >= x0 && intrace.sx <= x1 && intrace.gx >= x0 && intrace.gx <= x1)
+	{
+		trace_gxy[2 * ng] = intrace.gx;
+		trace_gxy[2 * ng + 1] = intrace.gy;
+		for (it = 0; it < nt; it++)
+		{
+			trace[nt*ng + it] = intrace.data[it];
+		}
+		ng++;
+		ns++;
+	}		
+	//warn("begin   sx=%d sy=%d",oldsx,oldsy);
+	do {
+		sx = intrace.sx;
+		sy = intrace.sy;
+		gx = intrace.gx;
+		gy = intrace.gy;
+		if (oldsx == sx && oldsy == sy)
+		{
+			if (intrace.sx >= x0 && intrace.sx <= x1 && intrace.gx >= x0 && intrace.gx <= x1)
+			{
+				trace_gxy[2 * ng] = intrace.gx;
+				trace_gxy[2 * ng + 1] = intrace.gy;
+				for (it = 0; it < nt; it++)
 				{
-					v0[k + j*nz + i*nz*nx] = vr[k + j*nz + i*nz*nx + i_sy*ds_y*nz*nx];
-                                         // v0[k + j*nz + i*nz*nx]=3000;
+					trace[nt*ng + it] = intrace.data[it];
 				}
-                  i_sy++;
-                  i_sx=0;
-                  //fwrite(v0, sizeof(float), nx*nz*ny, fp_v2);
-                  vmute=v0[0];
-                  //fwrite(v0, sizeof(float), nx*nz*ny, fp_v2);
-		  extend3d(v0, vv, nz, nx, ny, nb);
-		  //random_boundary(v0, vv, nz, nx, ny, nb);
-		  velocity_transform(vv, dt, dz, dx, dy, nz, nx, ny, nb);
-		  cudaMemcpy(d_vv, vv, nnz*nnx*nny * sizeof(float), cudaMemcpyHostToDevice);
-                }
-                
-		for (il = 0; il < nline; il++)
-		{
-			for (ig = 0; ig < line_ng; ig++)
-			{
-				index_sx = sx_beg+i_sx*ds_x;
-				index_sy = sy_beg;
-				index_sz = 3;
-				index_gx = gx_beg+ig*dg_x;
-				index_gy = gy_beg+il*dg_y;
-				index_gz = index_sz + 1;
-
-				igg = ig + il*line_ng;
-				
-				cuda_set_gzxy << <1, 1 >> >(d_gzxy, index_gz, index_gx, index_gy, igg, nz, nx, ny, nb);
+				ng++;
 			}
-
+			//warn("begin   sx=%d sy=%d ng=%d ns=%d nt=%d offset=%d \n",oldsx,oldsy,ng,ns,nt,intrace.offset);
 		}
-                i_sx++;
-                 printf("shot=%d: sx=%d  sy=%d sz=%d gx=%d gy= %d gz= %d i_sy=%d i_sx=%d\n", is, index_sx, index_sy, index_sz, index_gx, index_gy, index_gz,i_sy, i_sx);
-                
-		cuda_set_szxy << <1, 1 >> >(d_szxy, index_sz, index_sx, index_sy, is, nz, nx, ny, nb);
-		//matrix_transpose(transp, dobs, nt, ng);
-
-		cudaMemset(d_Isg, 0, N * sizeof(float));
-		cudaMemset(d_Iss, 0, N * sizeof(float));
-		cudaMemset(h_boundary, 0, nt_h * 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float));
-		cudaMemset(d_boundary, 0, (nt - nt_h) * 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float));
-		cudaMemset(d_p0, 0, nnz*nnx*nny * sizeof(float));
-		cudaMemset(d_p1, 0, nnz*nnx*nny * sizeof(float));
-
-		cudaMemset(d_dobs, 0, ng * sizeof(float));
-		//cudaMemcpy(d_dobs, dobs, ng*nt * sizeof(float), cudaMemcpyHostToDevice);
-		for (it = 0; it<nt; it++) {
-			cuda_add_source << <1, 1 >> >(true, d_p1, &d_wlt[it], &d_szxy[is], 1);
-			cuda_step_fd3d << <dimg, dimb >> >(d_p0, d_p1, d_vv, _dz2, _dx2, _dy2, nzb, nxb, nyb);
-
-			apply_sponge_tb << <dimgtb, dimb >> >(d_p0, d_abc, nz, nx, ny, nb);
-			apply_sponge_lr << <dimglr, dimb >> >(d_p0, d_abc, nz, nx, ny, nb);
-			apply_sponge_fr << <dimgfr, dimb >> >(d_p0, d_abc, nz, nx, ny, nb);
-
-			apply_sponge_tb << <dimgtb, dimb >> >(d_p1, d_abc, nz, nx, ny, nb);
-			apply_sponge_lr << <dimglr, dimb >> >(d_p1, d_abc, nz, nx, ny, nb);
-			apply_sponge_fr << <dimgfr, dimb >> >(d_p1, d_abc, nz, nx, ny, nb);
-
-			ptr = d_p0; d_p0 = d_p1; d_p1 = ptr;
-
-			cuda_record << <(ng + 255) / 256, 256 >> >(d_p0, d_dobs, d_gzxy, ng);
-			//cuda_mute << <dimgtb2, dimb >> >(d_dobs, &d_szxy[is], d_gzxy, it, 130, 2600, dt, dz, dx, dy, nz, nx, ny, nb, ng, 1);
-                        cudaMemcpy(&dobs[it*ng], d_dobs, ng * sizeof(float), cudaMemcpyDeviceToHost);
-			if (it<nt_h) cudaHostGetDevicePointer(&ptr, &h_boundary[it * 2 * (nx*ny + ny*nz + nz*nx)], 0);
-			if (it >= nt_h && it<nt_h + nt_d) ptr = &d_boundary[(it - nt_h) * 2 * (nx*ny + nx*nz + ny*nz)];
-			if (it >= nt_h + nt_d && it < nt)
+		else
+		{
+			// check the shot and receiver point in the grid mesh
+			for (i = 0; i < ng; i++)
 			{
-				cudaHostGetDevicePointer(&ptr, disk_boundary, 0);
+				if (trace_gxy[2 * i] >= maxx)
+					maxx = trace_gxy[2 * i];
+				if (trace_gxy[2 * i] <= minx)
+					minx = trace_gxy[2 * i];
+				if (trace_gxy[2 * i + 1] >= maxy)
+					maxy = trace_gxy[2 * i + 1];
+				if (trace_gxy[2 * i + 1] <= miny)
+					miny = trace_gxy[2 * i + 1];
 			}
-			cuda_rw_innertb << <dimgtb2, dimb >> >(ptr, d_p0, nz, nx, ny, nb, false);
-			cuda_rw_innerlr << <dimglr2, dimb >> >(&ptr[2 * nx*ny], d_p0, nz, nx, ny, nb, false);
-			cuda_rw_innerfr << <dimgfr2, dimb >> >(&ptr[2 * (nx*ny + ny*nz)], d_p0, nz, nx, ny, nb, false);
-			if (it >= nt_h + nt_d && it <nt)
+			if (minx<xd && maxx >xd && minx>=x0 && maxx<=x1 )
 			{
+				dobs = alloc1float(nt*ng);
+				memset(dobs, 0, nt*ng * sizeof(float));
+				matrix_transpose(trace, dobs, nt, ng);
+
+				nx = (maxx-minx) / ddx;
+				ny = (maxy -miny) / ddy;
+				warn("Migration shot=%d, ng=%d nx=%d, ny=%d\n ", ns, ng, nx,ny);
+				xr0 = minx;
+				yr0 = miny;
+
+				nzb = nz + 2 * nb;
+				nxb = nx + 2 * nb;
+				nyb = ny + 2 * nb;
+				nnz = nz + 2 * nbr;
+				nnx = nx + 2 * nbr;
+				nny = ny + 2 * nbr;
+				N = nnx*nny*nnz;
+				v0 = alloc1float(nz*nx*ny);
+				vv = alloc1float(N);
+				memset(v0, 0, nx*ny*nz * sizeof(float));
+				memset(vv, 0, nnx*nny*nnz * sizeof(float));
+
+				dimg.x = (nzb + BlockSize1 - 1) / BlockSize1;
+				dimg.y = (nxb + BlockSize2 - 1) / BlockSize2;
+				dimb.x = BlockSize1;
+				dimb.y = BlockSize2;
+				dimgtb.x = (nnx + BlockSize1 - 1) / BlockSize1;
+				dimgtb.y = (nny + BlockSize2 - 1) / BlockSize2;
+
+				dimglr.x = (nnz + BlockSize1 - 1) / BlockSize1;
+				dimglr.y = (nny + BlockSize2 - 1) / BlockSize2;
+
+				dimgfr.x = (nnz + BlockSize1 - 1) / BlockSize1;
+				dimgfr.y = (nnx + BlockSize2 - 1) / BlockSize2;
+				dimgtb2.x = (nx + BlockSize1 - 1) / BlockSize1;
+				dimgtb2.y = (ny + BlockSize2 - 1) / BlockSize2;
+
+				dimglr2.x = (nz + BlockSize1 - 1) / BlockSize1;
+				dimglr2.y = (ny + BlockSize2 - 1) / BlockSize2;
+
+				dimgfr2.x = (nz + BlockSize1 - 1) / BlockSize1;
+				dimgfr2.y = (nx + BlockSize2 - 1) / BlockSize2;
+
+				//////////////////////////////////////////////////////////////////////
+				cudaMalloc(&d_abc, nbr * sizeof(float));
+				cudaMalloc(&d_wlt, nt * sizeof(float));
+				cudaMalloc(&d_vv, nnz*nnx*nny * sizeof(float));
+				cudaMalloc(&d_p0, nnz*nnx*nny * sizeof(float));
+				cudaMalloc(&d_p1, nnz*nnx*nny * sizeof(float));
+				cudaMalloc(&d_gp0, nnz*nnx*nny * sizeof(float));
+				cudaMalloc(&d_gp1, nnz*nnx*nny * sizeof(float));
+				cudaMalloc(&d_Iss, N * sizeof(float));
+				cudaMalloc(&d_Isg, N * sizeof(float));
+				//cudaMalloc(&d_I1, N * sizeof(float));
+				//cudaMalloc(&d_I2, N * sizeof(float));
+				cudaMalloc(&d_dobs, ng * sizeof(float));
+				cudaMalloc(&d_szxy, 1 * sizeof(int));
+				cudaMalloc(&d_gzxy, ng * sizeof(int));
+				sf_check_gpu_error("Failed to initialize device memory of wave field!");
+				m_boundary = 2.0 * (nx*ny + nx*nz + ny*nz) * 4;
+				nt_d = int(0 * 1024 * 1024 * 1024 / m_boundary);
+				nt_h = int(20.0 * 1024 * 1024 * 1024 / m_boundary);
+				if (nt_d > nt)
+				{
+					nt_d = nt;
+					nt_h = 0;
+					nt_disk = 0;
+				}
+				if (nt_d<nt && nt_d + nt_h >nt)
+				{
+					nt_h = nt - nt_d;
+					nt_disk = 0;
+
+				}
+				if (nt_d<nt && nt_d + nt_h <nt)
+				{
+
+					nt_disk = nt - nt_d - nt_h;
+
+				}
+				//printf("nt=%d nt_d=%d nt_h=%d nt_disk=%d nt_all=%d \n", nt, nt_d, nt_h, nt_disk, nt_d + nt_h + nt_disk);
+				warn("nt=%d nt_d=%d nt_h=%d nt_disk=%d nt_all=%d \n", nt, nt_d, nt_h, nt_disk, nt_d + nt_h + nt_disk);
+
+				cudaHostAlloc(&h_boundary, nt_h * 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float), cudaHostAllocMapped);
+				cudaHostAlloc(&disk_boundary, 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float), cudaHostAllocMapped);
+				cudaMalloc(&d_boundary, (nt_d) * 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float));
+				cudaMemset(h_boundary, 0, nt_h * 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float));
+				cudaMemset(d_boundary, 0, (nt_d) * 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float));
+				cudaMemset(disk_boundary, 0, 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float));
+				//cudaMemset(d_I1, 0, N * sizeof(float));
+				//cudaMemset(d_I2, 0, N * sizeof(float));
+				sf_check_gpu_error("Failed to allocate memory for variables!");
+				cuda_ricker_wavelet << <(nt + 511) / 512, 512 >> >(d_wlt, fm, dt, nt);
+				cuda_abc << <nbr + 15, 16 >> >(d_abc, nbr);
+
+				//////////////////////////////////////////////////////////////////////////////
+				cudaEventRecord(start);
+				fseek(fp_disk, 0, SEEK_SET);
+				i_x = ((minx - x0) / ddx);
+				i_y = ((miny - y0) / ddy);
+				mig = i_x*nz*ncdp + i_y*nz;
+				for (i = 0; i < nx; i++)
+					for (j = 0; j < ny; j++)
+						for (k = 0; k < nz; k++)
+						{
+							//v0[k + j*nz + i*nz*nx] = vr[mig + k + j*nzr + i*nzr*nxr];
+							//v0[k + j*nz + i*nz*nx]=2000+k*10;
+							v0[k + i*nz + j*nz*nline] = 2500 + k * 10;
+							// if( k>170)   v0[k + j*nz + i*nz*nx]=4500;
+						}
+				extend3d(v0, vv, nz, nx, ny, nb);
+				velocity_transform(vv, dt, dz, dx, dy, nz, nx, ny, nb);
+				cudaMemcpy(d_vv, vv, nnz*nnx*nny * sizeof(float), cudaMemcpyHostToDevice);
+				for (ig = 0; ig < ng; ig++)
+				{
+					index_gx = (trace_gxy[2 * ig] - xr0) / ddx;
+					index_gy = (trace_gxy[2 * ig + 1] - yr0) / ddy;
+					index_gz = 2;
+					cuda_set_gzxy << <1, 1 >> >(d_gzxy, index_gz, index_gx, index_gy, ig, nz, nx, ny, nb);
+					index_sx = (oldsx - xr0) / ddx;
+					index_sy = (oldsy - yr0) / ddy;
+					index_sz = 1
+						//index_sx = 150;
+						//index_sy = 150;
+				}
+				warn("index_sx=%d  index_sy=%d  index_gx=%d index_gy= %d \n", ns, index_sx, index_sy, index_gx, index_gy);
+
+				cuda_set_szxy << <1, 1 >> >(d_szxy, index_sz, index_sx, index_sy, 0, nz, nx, ny, nb);
+				//matrix_transpose(transp, dobs, nt, ng);
+
+				cudaMemset(d_Isg, 0, N * sizeof(float));
+				cudaMemset(d_Iss, 0, N * sizeof(float));
+				cudaMemset(h_boundary, 0, nt_h * 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float));
+				cudaMemset(d_boundary, 0, (nt - nt_h) * 2 * (nx*ny + nx*nz + ny*nz) * sizeof(float));
+				cudaMemset(d_p0, 0, nnz*nnx*nny * sizeof(float));
+				cudaMemset(d_p1, 0, nnz*nnx*nny * sizeof(float));
+
+				cudaMemset(d_dobs, 0, ng * sizeof(float));
+				//cudaMemcpy(d_dobs, dobs, ng*nt * sizeof(float), cudaMemcpyHostToDevice);
+				for (it = 0; it<nt; it++) {
+					cuda_add_source << <1, 1 >> >(true, d_p1, &d_wlt[it], &d_szxy[0], 1);
+					cuda_step_fd3d << <dimg, dimb >> >(d_p0, d_p1, d_vv, _dz2, _dx2, _dy2, nzb, nxb, nyb);
+
+					apply_sponge_tb << <dimgtb, dimb >> >(d_p0, d_abc, nz, nx, ny, nb);
+					apply_sponge_lr << <dimglr, dimb >> >(d_p0, d_abc, nz, nx, ny, nb);
+					apply_sponge_fr << <dimgfr, dimb >> >(d_p0, d_abc, nz, nx, ny, nb);
+
+					apply_sponge_tb << <dimgtb, dimb >> >(d_p1, d_abc, nz, nx, ny, nb);
+					apply_sponge_lr << <dimglr, dimb >> >(d_p1, d_abc, nz, nx, ny, nb);
+					apply_sponge_fr << <dimgfr, dimb >> >(d_p1, d_abc, nz, nx, ny, nb);
+
+					ptr = d_p0; d_p0 = d_p1; d_p1 = ptr;
+
+					//cuda_record << <(ng + 255) / 256, 256 >> >(d_p0, d_dobs, d_gzxy, ng);
+					//cuda_mute << <dimgtb2, dimb >> >(d_dobs, &d_szxy[is], d_gzxy, it, 130, 2600, dt, dz, dx, dy, nz, nx, ny, nb, ng, 1);
+					//cudaMemcpy(&dobs[it*ng], d_dobs, ng * sizeof(float), cudaMemcpyDeviceToHost);
+					if (it<nt_h) cudaHostGetDevicePointer(&ptr, &h_boundary[it * 2 * (nx*ny + ny*nz + nz*nx)], 0);
+					if (it >= nt_h && it<nt_h + nt_d) ptr = &d_boundary[(it - nt_h) * 2 * (nx*ny + nx*nz + ny*nz)];
+					if (it >= nt_h + nt_d && it < nt)
+					{
+						cudaHostGetDevicePointer(&ptr, disk_boundary, 0);
+					}
+					cuda_rw_innertb << <dimgtb2, dimb >> >(ptr, d_p0, nz, nx, ny, nb, false);
+					cuda_rw_innerlr << <dimglr2, dimb >> >(&ptr[2 * nx*ny], d_p0, nz, nx, ny, nb, false);
+					cuda_rw_innerfr << <dimgfr2, dimb >> >(&ptr[2 * (nx*ny + ny*nz)], d_p0, nz, nx, ny, nb, false);
+					if (it >= nt_h + nt_d && it <nt)
+					{
+						fwrite(disk_boundary, sizeof(float), 2 * (nx*ny + nx*nz + ny*nz), fp_disk);
+
+					}
+					/*
+					if (it == 949)
+					{
+						cudaMemcpy(vv, d_p0, nnz*nnx*nny * sizeof(float), cudaMemcpyDeviceToHost);
+						window3d(v0, vv, nz, nx, ny, nb);
+						//fwrite(v0, sizeof(float), nx*ny*nz, fp_p);
+						for (i = 0; i<ny; i++)
+							for (j = 0; j<nz; j++)
+								fwrite(&v0[150 * nz + i*nz*nx + j], sizeof(float), 1, fp_p);
+					}
+					*/
+
+					if (it % 100 == 0)
+						warn("it=%d \n", it);
+				}
+
+
+
 				fwrite(disk_boundary, sizeof(float), 2 * (nx*ny + nx*nz + ny*nz), fp_disk);
+				ptr = d_p0; d_p0 = d_p1; d_p1 = ptr;
+				cudaMemset(d_gp0, 0, nnz*nnx*nny * sizeof(float));
+				cudaMemset(d_gp1, 0, nnz*nnx*nny * sizeof(float));
+				//cudaMemcpy(transp, d_dobs, nt*ng * sizeof(float), cudaMemcpyDeviceToHost);
+				//matrix_transpose(dobs, transp, ng, nt);
+				fwrite(dobs, sizeof(float), nt*ng, fp_r);
 
-			}
-/*
-			if (it == 500 &&is==1)
-			{
-				cudaMemcpy(vv, d_p0, nnz*nnx*nny * sizeof(float), cudaMemcpyDeviceToHost);
+				for (it = nt - 1; it>-1; it--)
+				{
+					if (it<nt_h) cudaHostGetDevicePointer(&ptr, &h_boundary[it * 2 * (nx*ny + ny*nz + nz*nx)], 0);
+					if (it >= nt_h && it<nt_h + nt_d)  ptr = &d_boundary[(it - nt_h) * 2 * (nx*ny + nx*nz + ny*nz)];
+					if (it >= nt_h + nt_d && it < nt)
+					{
+						fseek(fp_disk, -2L * sizeof(disk_boundary), SEEK_CUR);
+						fread(disk_boundary, sizeof(float), 2 * (nx*ny + nx*nz + ny*nz), fp_disk);
+						cudaHostGetDevicePointer(&ptr, disk_boundary, 0);
+						warn("disk it=%d !! \n", it);
+					}
+					cuda_rw_innertb << <dimgtb2, dimb >> >(ptr, d_p1, nz, nx, ny, nb, true);
+					cuda_rw_innerlr << <dimglr2, dimb >> >(&ptr[2 * nx*ny], d_p1, nz, nx, ny, nb, true);
+					cuda_rw_innerfr << <dimgfr2, dimb >> >(&ptr[2 * (nx*ny + ny*nz)], d_p1, nz, nx, ny, nb, true);
+
+					cuda_step_fd3d << <dimg, dimb >> >(d_p0, d_p1, d_vv, _dz2, _dx2, _dy2, nzb, nxb, nyb);
+					cuda_add_source << <1, 1 >> >(false, d_p1, &d_wlt[it], &d_szxy[0], 1);
+					ptr = d_p0; d_p0 = d_p1; d_p1 = ptr;
+
+					cudaMemcpy(d_dobs, &dobs[it*ng], ng * sizeof(float), cudaMemcpyHostToDevice);
+					cuda_add_source << <(ng + 255) / 256, 256 >> >(true, d_gp0, d_dobs, d_gzxy, ng);
+					cuda_step_fd3d << <dimg, dimb >> >(d_gp0, d_gp1, d_vv, _dz2, _dx2, _dy2, nzb, nxb, nyb);
+
+					apply_sponge_tb << <dimgtb, dimb >> >(d_gp0, d_abc, nz, nx, ny, nb);
+					apply_sponge_lr << <dimglr, dimb >> >(d_gp0, d_abc, nz, nx, ny, nb);
+					apply_sponge_fr << <dimgfr, dimb >> >(d_gp0, d_abc, nz, nx, ny, nb);
+
+					apply_sponge_tb << <dimgtb, dimb >> >(d_gp1, d_abc, nz, nx, ny, nb);
+					apply_sponge_lr << <dimglr, dimb >> >(d_gp1, d_abc, nz, nx, ny, nb);
+					apply_sponge_fr << <dimgfr, dimb >> >(d_gp1, d_abc, nz, nx, ny, nb);
+
+					ptr = d_gp0; d_gp0 = d_gp1; d_gp1 = ptr;
+					/*
+					if (it >nt / 12 * 7 && it % 30 == 0)
+					{
+						cudaMemcpy(vv, d_gp0, nnz*nnx*nny * sizeof(float), cudaMemcpyDeviceToHost);
+						window3d(v0, vv, nz, nx, ny, nb);
+						//fwrite(v0, sizeof(float), nx*ny*nz, fp_p);
+						for (i = 0; i<ny; i++)
+							for (j = 0; j<nz; j++)
+								fwrite(&v0[70 * nz + i*nz*nx + j], sizeof(float), 1, fp_p);
+					}
+					if (it >nt / 12 * 7 && it % 30 == 0)
+					{
+						cudaMemcpy(vv, d_p0, nnz*nnx*nny * sizeof(float), cudaMemcpyDeviceToHost);
+						window3d(v0, vv, nz, nx, ny, nb);
+						//fwrite(v0, sizeof(float), nx*ny*nz, fp_p);
+						for (i = 0; i<ny; i++)
+							for (j = 0; j<nz; j++)
+								fwrite(&v0[70 * nz + i*nz*nx + j], sizeof(float), 1, fp_i2);
+					}
+					*/
+
+					if (it>nt / 12 * 7)
+						cuda_cross_correlate << <dimgfr, dimb >> >(d_Isg, d_Iss, d_p0, d_gp0, nz, nx, ny, nb);
+					if (it % 100 == 0)
+						warn("it=%d \n", it);
+				}
+				// finished one shots;
+
+				//cuda_imaging << <dimgfr, dimb >> >(d_Isg, d_Iss, d_I1, d_I2, nz, nx, ny, nb);
+				cuda_imaging22 << <dimgfr, dimb >> >(d_Isg, d_Iss, d_p0, d_gp0, nz, nx, ny, nb);
+				cuda_laplace_filter << <dimgfr, dimb >> >(d_p0, d_Isg, 1. / dz, 1. / dx, 1. / dy, nz, nx, ny, nb);
+				cudaEventRecord(stop);
+				cudaEventSynchronize(stop);
+				cudaEventElapsedTime(&mstimer, start, stop);
+				warn("%d shot finished : %g(s) \n", ns, mstimer*1.e-3);
+				
+				
+				// write file
+				cudaMemcpy(vv, d_Isg, nnz*nnx*nny * sizeof(float), cudaMemcpyDeviceToHost);
 				window3d(v0, vv, nz, nx, ny, nb);
-				fwrite(v0, sizeof(float), nx*ny*nz, fp_p);
+				for(i=0;i<nx;i++)
+					for (j = 0; j < ny; j++)
+					{
+
+						outtrace.sx = xr0 + i*dx;
+						outtrace.sy = yr0 + j*dx;
+						outtrace.cdp = (yr0 + j*dx-y_beg)/ddy;
+						outtrace.fldr = (xr0 + i*dx - x_beg) / ddx;
+						for (k = 0; k < nz; k++)
+						{
+							outtrace.data[k] = v0[k + j*nz*nx + i + nz];
+							
+						}
+					
+						puttr(&outtrace);
+					}	
+			}// if 
+
+
+			//////////////////////////////////////////////////////////////////////////////////////////////////
+			memset(trace, 0, nt*ntr * sizeof(float));
+			memset(trace_gxy, 0, 2 * ntr * sizeof(int));
+
+			ns++;
+			ng = 0;
+			oldsx = sx;
+			oldsy = sy;
+			minx = oldsx;
+			maxx = oldsx;
+			miny = oldsy;
+			maxy = oldsy;
+			if (intrace.sx >= x0 && intrace.sx <= x1 && intrace.gx >= x0 && intrace.gx <= x1)
+			{
+				trace_gxy[2 * ng] = intrace.gx;
+				trace_gxy[2 * ng + 1] = intrace.gy;
+				for (it = 0; it < nt; it++)
+				{
+					trace[nt*ng + it] = intrace.data[it];
+				}
+				ng++;
 			}
-*/
-			if (it % 100 == 0)
-				printf("it=%d \n", it);
+			/*
+			cudaMemcpy(vv, d_Isg, nnz*nnx*nny * sizeof(float), cudaMemcpyDeviceToHost);
+			window3d(v0, vv, nz, nx, ny, nb);
+			im = nx / 3;
+
+			for (i = 0; i<ny; i++)
+				for (k = im; k<2 * im; k++)
+					for (j = 0; j<nz; j++)
+						fwrite(&v0[k*nz + i*nz*nx + j], sizeof(float), 1, fp_i1);
+			*/
+			// write su file
+			/*
+			for (i = 0; i<ny; i++)
+				for (j = im; j < 2 * im; j++)
+				{
+					for (k = 0; k < nz; k++)
+					{
+						intrace.data[k] = v0[k + j*nz + i*nz*nx];
+					}
+					intrace.sx = (i_x + j)*ddx;
+					intrace.sy = (i_y + i)*ddy;
+					intrace.cdp = i_x + i_y*nxr;
+
+					puttr(&intrace);
+				}
+
+
+		    */
+			/*
+			memset(tracet, 0, nt*ntr * sizeof(float));
+			memset(trace_gxy, 0, 2 * ntr * sizeof(int));
+
+			ns++;
+			ng = 0;
+			oldsx = sx;
+			oldsy = sy;
+			trace_gxy[2 * ng] = intrace.gx;
+			trace_gxy[2 * ng + 1] = intrace.gy;
+			ng++;
+			*/
 		}
 
-		fwrite(disk_boundary, sizeof(float), 2 * (nx*ny + nx*nz + ny*nz), fp_disk);
-		ptr = d_p0; d_p0 = d_p1; d_p1 = ptr;
-		cudaMemset(d_gp0, 0, nnz*nnx*nny * sizeof(float));
-		cudaMemset(d_gp1, 0, nnz*nnx*nny * sizeof(float));
+	} while (gettr(&intrace) && ns <= nss);
 
-		//cudaMemcpy(transp, d_dobs, nt*ng * sizeof(float), cudaMemcpyDeviceToHost);
-		matrix_transpose( dobs, transp, ng, nt);
-		fwrite(transp, sizeof(float), nt*ng, fp_r);
-/*
-		for (it = nt - 1; it>-1; it--)
-		{
+	warn(" success !  \n ");
 
-
-			if (it<nt_h) cudaHostGetDevicePointer(&ptr, &h_boundary[it * 2 * (nx*ny + ny*nz + nz*nx)], 0);
-			if (it >= nt_h && it<nt_h + nt_d)  ptr = &d_boundary[(it - nt_h) * 2 * (nx*ny + nx*nz + ny*nz)];
-			if (it >= nt_h + nt_d && it < nt)
-			{
-				fseek(fp_disk, -2L * sizeof(disk_boundary), SEEK_CUR);
-				fread(disk_boundary, sizeof(float), 2 * (nx*ny + nx*nz + ny*nz), fp_disk);
-				cudaHostGetDevicePointer(&ptr, disk_boundary, 0);
-				printf("disk it=%d !! \n", it);
-			}
-			cuda_rw_innertb << <dimgtb2, dimb >> >(ptr, d_p1, nz, nx, ny, nb, true);
-			cuda_rw_innerlr << <dimglr2, dimb >> >(&ptr[2 * nx*ny], d_p1, nz, nx, ny, nb, true);
-			cuda_rw_innerfr << <dimgfr2, dimb >> >(&ptr[2 * (nx*ny + ny*nz)], d_p1, nz, nx, ny, nb, true);
-
-			cuda_step_fd3d << <dimg, dimb >> >(d_p0, d_p1, d_vv, _dz2, _dx2, _dy2, nzb, nxb, nyb);
-			cuda_add_source << <1, 1 >> >(false, d_p1, &d_wlt[it], &d_szxy[is], 1);
-			ptr = d_p0; d_p0 = d_p1; d_p1 = ptr;
-                       
-                        cudaMemcpy(d_dobs, &dobs[it*ng], ng * sizeof(float), cudaMemcpyHostToDevice);
-			cuda_add_source << <(ng + 255) / 256, 256 >> >(true, d_gp0, d_dobs, d_gzxy, ng);
-			cuda_step_fd3d << <dimg, dimb >> >(d_gp0, d_gp1, d_vv, _dz2, _dx2, _dy2, nzb, nxb, nyb);
-
-			apply_sponge_tb << <dimgtb, dimb >> >(d_gp0, d_abc, nz, nx, ny, nb);
-			apply_sponge_lr << <dimglr, dimb >> >(d_gp0, d_abc, nz, nx, ny, nb);
-			apply_sponge_fr << <dimgfr, dimb >> >(d_gp0, d_abc, nz, nx, ny, nb);
-
-			apply_sponge_tb << <dimgtb, dimb >> >(d_gp1, d_abc, nz, nx, ny, nb);
-			apply_sponge_lr << <dimglr, dimb >> >(d_gp1, d_abc, nz, nx, ny, nb);
-			apply_sponge_fr << <dimgfr, dimb >> >(d_gp1, d_abc, nz, nx, ny, nb);
-
-			ptr = d_gp0; d_gp0 = d_gp1; d_gp1 = ptr;
-
-			cuda_cross_correlate << <dimgfr, dimb >> >(d_Isg, d_Iss, d_p0, d_gp0, nz, nx, ny, nb);
-			//cuda_cross_correlate2 << <dimgfr, dimb >> >(d_Isg, d_Iss, d_p0, d_gp0,nsg,nss, nz, nx, ny, nb);
-
-
-
-
-if (it == 500 && is==100)
-			{
-				cudaMemcpy(vv, d_p0, nnz*nnx*nny * sizeof(float), cudaMemcpyDeviceToHost);
-				window3d(v0, vv, nz, nx, ny, nb);
-				fwrite(v0, sizeof(float), nx*ny*nz, fp_c); 
-                                printf("yyyyyyyyyyyyyyyyy");
-			}
-
-
-			//sf_warning("it=%d;", it);
-			if (it % 100 == 0)
-				printf("it=%d \n", it);
-                 
-		}
-*/
-
-                cuda_imaging << <dimgfr, dimb >> >(d_Isg, d_Iss, d_I1, d_I2, nz, nx, ny, nb);
-                cuda_imaging22 << <dimgfr, dimb >> >(d_Isg, d_Iss, d_p0, d_gp0, nz, nx, ny, nb);
-		cuda_laplace_filter << <dimgfr, dimb >> >(d_p0, d_Isg, 1. / dz, 1. / dx, 1. / dy, nz, nx, ny, nb);
-		cudaMemcpy(vv, d_Isg, nnz*nnx*nny * sizeof(float), cudaMemcpyDeviceToHost);
-		window3d(v0, vv, nz, nx, ny, nb);
-		fwrite(v0, sizeof(float), nx*ny*nz, fp_i1);
-                if(i_sx== ns_x || is==ns-1)
-                {
-                cuda_laplace_filter << <dimgfr, dimb >> >(d_I1, d_Iss, 1. / dz, 1. / dx, 1. / dy, nz, nx, ny, nb);
-		cudaMemcpy(vv, d_Iss, nnz*nnx*nny * sizeof(float), cudaMemcpyDeviceToHost);
-		window3d(v0, vv, nz, nx, ny, nb);
-		fwrite(v0, sizeof(float), nx*ny*nz, fp_i2);
-                cudaMemset(d_I1, 0, N * sizeof(float));
-        	cudaMemset(d_I2, 0, N * sizeof(float));
-                printf("output a image\n"); 
-                }
-                
-		
-		cudaEventRecord(stop);
-		cudaEventSynchronize(stop);
-		cudaEventElapsedTime(&mstimer, start, stop);
-		printf("%d shot finished : %g(s) \n", is, mstimer*1.e-3);
-
-}
-
-
-
-
-		
-
-	/*
-	cuda_laplace_filter << <dimgfr, dimb >> >(d_I1, d_p0, 1./dz,1./dx,1./dy, nz, nx, ny, nb);
-	cudaMemcpy(vv, d_p0, nnz*nnx*nny * sizeof(float), cudaMemcpyDeviceToHost);
-	window3d(v0, vv, nz, nx, ny, nb);
-	fwrite(v0, sizeof(float), nx*ny*nz, fp_i1);
-
-	cuda_laplace_filter << <dimgfr, dimb >> >(d_I2, d_p0, 1. / dz, 1. / dx, 1. / dy, nz, nx, ny, nb);
-	cudaMemcpy(vv, d_p0, nnz*nnx*nny * sizeof(float), cudaMemcpyDeviceToHost);
-	window3d(v0, vv, nz, nx, ny, nb);
-	fwrite(v0, sizeof(float), nx*ny*nz, fp_i2);
-	*/
-
-	//cudaMemcpy(vv, d_p0, nnz*nnx*nny * sizeof(float), cudaMemcpyDeviceToHost);
-	//fwrite(&h_boundary[it * 2 * (nx*ny + ny*nz + nz*nx) + 2 * nx*ny + 2 * nz*ny], sizeof(float), nz*nx, fp_c);
-
-	cudaEventDestroy(start);
-	cudaEventDestroy(stop);
-
-	/* free memory on device */
-	cudaFree(d_wlt);
-	cudaFree(d_vv);
-	cudaFree(d_p0);
-	cudaFree(d_p1);
-	cudaFree(d_szxy);
-	free(v0);
-	free(vv);
-
-	//exit(0);
+	checkpars();
+	return(CWP_Exit());
 }
