@@ -7,7 +7,7 @@ the direction of inline, program will output imaging of every shot, so
 I suggest you stacking this SU file to get a final imaging lines. */
 /*                                                        */
 /*                                                        */
-/* Copyright (c), Chinese Academy of Science, Guiting Chen,2018.12.16 */
+/* Copyright (c), Chinese Academy of Science, Guiting Chen,2018.12.15 */
 /* All rights reserved. */
 
 
@@ -1167,32 +1167,44 @@ main(int argc, char **argv)
 	hfp = etmpfile();
 	bool verb;
 	int nz, nx, ny, nb, nbr, nzb, nxb, nyb, nnz, nnx, nny, ns = 0, ng = 0, nt, kt, it, is, szbeg, sxbeg, sybeg, jsz, jsx, jsy, N, il, igg, i_sx, i_sy, i_x, i_y, iline;
-	int nz_s, nx_s, ny_s, nxb_s, nyb_s, nzb_s, nxb_g, nyb_g, nz_g, nnz_s, nnx_s, nny_s, nnz_g, nnx_g, nny_g, N_s, N_g;
+	int nz_s, nx_s, ny_s, nxb_s, nyb_s, nzb_s, nxb_g, nyb_g, nzb_g, nnz_s, nnx_s, nny_s, nnz_g, nnx_g, nny_g, N_s, N_g;
 	int nz_g, nx_g, ny_g;
 	int i_x_s, i_y_s, i_x_g, i_y_g;
-	int *d_szxy, *d_gzxy;
-	float dz, dx, dy, fm, dt, _dz2, _dx2, _dy2;
-	int ddz, ddx, ddy;
-	float *v0, *vv, *d_wlt, *d_vv, *d_abc, *d_p0, *d_p1, *d_gp0, *d_gp1, *ptr, *d_dobs, *dobs, *transp;
-	float *v0_s, *v0_g, *vv_s, *vv_g, *d_vv_s, *d_vv_g;
-	int N_image;
-	int mig_s;
-	int mig_g;
-	int expends = 6;
-	//float *d_p0_s, *d_p1_s;
-	//float *d_gp0_g, *d_gp1_g,
-	float *d_Isg, *d_Iss, *d_I1, *d_I2;
-	float 	*h_boundary, *d_boundary;    /* boundary on host and device */
-	int  ktt, i, j, k;
+	int i_x_s_beg, i_y_s_beg, i_x_g_beg, i_y_g_beg;
+	int i_x_image;
+	int index_sx_image, index_gx_image;
 	int x_beg, y_beg;
+	int x_image, y_image;
+	int x_min, y_min, x_max, y_max;
 	int start_line;
 	int line_range;
 	int line_last;
 	int line_start;
 	int ncdp;
 	int ninline;
-	int x0, y0, x1, y1, xd, xr0, yr0;
+	int slice = 0;
+	int nt_image;
 
+
+	int *d_szxy, *d_gzxy;
+	float dz, dx, dy, fm, dt, _dz2, _dx2, _dy2;
+	int ddz, ddx, ddy;
+	float *v0, *vv, *d_wlt, *d_vv, *d_abc, *d_p0, *d_p1, *d_gp0, *d_gp1, *ptr, *d_dobs, *dobs, *transp;
+	float *v0_slice, *v0_s, *v0_g, *vv_s, *vv_g, *d_vv_s, *d_vv_g;
+	int N_image;
+	int mig_s_x, mig_s_y;
+	int mig_g_x, mig_g_y;
+	int expends = 6;
+	//float *d_p0_s, *d_p1_s;
+	//float *d_gp0_g, *d_gp1_g,
+	float *d_Isg, *d_Iss, *d_I1, *d_I2;
+	float 	*h_boundary, *d_boundary;    /* boundary on host and device */
+	int  ktt, i, j, k;
+	
+
+
+
+	int x0, y0, x1, y1, xd, xr0, yr0;
 	int id;
 	int nxr, nyr, nzr;
 	int mig;
@@ -1217,8 +1229,9 @@ main(int argc, char **argv)
 	int oldsx, oldsy, oldsz, oldgx, oldgy, oldgz;
 	float offset;
 	int maxx = -1000, minx = 10000000, maxy = -1000, miny = 10000000;
-	FILE *fp_p, *fp_r, *fp_i1, *fp_i2;
-	fp_p = fopen("p.bin", "wb");
+	FILE *fp_forward, *fp_back, *fp_r, *fp_i1, *fp_i2;
+	fp_forward = fopen("forward.bin", "wb");
+	fp_back = fopen("back.bin", "wb");
 	fp_i1 = fopen("I1.bin", "wb");
 	fp_r = fopen("r.bin", "wb");
 	fp_i2 = fopen("pp.bin", "wb");
@@ -1237,34 +1250,39 @@ main(int argc, char **argv)
 	if (!getparint("dy", &ddy)) err("can't get ddy");
 	if (!getparint("dz", &ddz)) err("can't get ddz");
 	if (!getparfloat("fm", &fm)) err("can't get fm");
+	if (!getparfloat("vmute", &vmute)) err("can't get vmute");
 	//if (!getparint("nxr", &nxr)) err("can't get nxr");
 	//if (!getparint("nyr", &nyr)) err("can't get nyr");
 	//if (!getparint("nzr", &nzr)) err("can't get nzr");
 	if (!getparint("ncdp", &ncdp)) err("can't get ncdp");
 	if (!getparint("ninline", &ninline)) err("can't get ninline");
+	if (!getparint("nz", &nz)) err("can't get nz");
 	if (!getparint("line_range", &line_range)) err("can't get ine_range");
 	if (!getparint("start_line", &start_line)) err("can't get start_line");
+	if (!getparint("slice", &slice)) err("Whether slice");
 
-	x0 = x_beg + (start_line - 1 - line_range)*dx;
+
+	//  geometry
+	x_min = x_beg + (start_line - 1 - line_range)*ddx;
 	line_start = start_line - 1 - line_range;
 	if ((start_line - 1 - line_range) < 0)
 	{
-		x0 = x_beg;
+		x_min = x_beg;
 		line_start = 0;
 	}
-	y0 = y_beg;
+	y_min = y_beg;
 
-	x1 = x_beg + (start_line - 1 + line_range)*dx;
+	x_max = x_beg + (start_line - 1 + line_range)*ddx;
 	line_last = start_line - 1 + line_range;
-	if ((start_line - 1 + line_range) < nline)
+	if ((start_line - 1 + line_range) >= nline)
 	{
-		x1 = x_beg + (nline - 1)*dx;
+		x_max = x_beg + (nline - 1)*ddx;
 		line_last = nline - 1;
 	}
-	y1 = y_beg + （ncdp - 1）*dy;
+	y_max = y_beg + （ncdp - 1）*ddy;
 
-	xd = x_beg + (start_line - 1)*dx;
-
+	x_image = x_beg + (start_line - 1)*ddx;
+	i_x_image = (start_line );
 
 	dx = 1.0 * ddx;
 	dy = 1.0 * ddy;
@@ -1273,7 +1291,6 @@ main(int argc, char **argv)
 	dt = intrace.dt;
 	dt = dt / 1000000;
 	dt = 0.001;
-	nz = nzr;
 	/* Store traces in tmpfile while getting a count of number of traces */
 	_dz2 = 1.0 / (dz*dz);
 	_dx2 = 1.0 / (dx*dx);
@@ -1281,22 +1298,20 @@ main(int argc, char **argv)
 	nbr = nb + radius;
 
 	// read velocity, the sequence arranges in the  direction of cdp.
-	float *vr, *vt;
+	float *vr, *v_slice;
 	vr = (float*)malloc(ncdp*nz*(2 * line_range + 1) * sizeof(float));
-	vt = (float*)malloc(ncdp*nz * sizeof(float));
+	v_slice = (float*)malloc(ncdp*nz * sizeof(float));
 	vfp = fopen(vfile, "rb");
 	for (i = 0; i <= line_last; i++)    // inline adding
 	{
 		if (i < line_start)
 		{
-			fread(vt, sizeof(float), ncdp*nz, vfp);
+			fread(v_slice, sizeof(float), ncdp*nz, vfp);
 		}
 		if (i >= line_start && i <= line_last)
 		{
-			for (j = 0; j < ncdp; j++)             // cdp adding
-			{
-				fread(&vr[(i - line_start)*nz + j*nz*(2 * line_range + 1)], sizeof(float), nz, vfp);
-			}
+			// velocity
+			fread(&vr[(i - line_start)*nz*ncdp], sizeof(float), nz*ncdp, vfp);
 		}
 
 	}
@@ -1330,6 +1345,7 @@ main(int argc, char **argv)
 	memset(trace, 0, nt*ntr * sizeof(float));
 	memset(trace_gxy, 0, 2 * ntr * sizeof(int));
 
+	///////// start for ///
 	oldsx = intrace.sx;
 	oldsy = intrace.sy;
 	minx = oldsx;
@@ -1337,10 +1353,10 @@ main(int argc, char **argv)
 	miny = oldsy;
 	maxy = oldsy;
 
-	if (intrace.sx >= x0 && intrace.sx <= x1 && intrace.gx >= x0 && intrace.gx <= x1)
+	if (intrace.sx >= x_min && intrace.sx <= x_max && intrace.gx >= x_min && intrace.gx <= x_max)
 	{
-		if (intrace.sx >= xd) flag_s = 1;
-		if (intrace.gx >= xd) flag_g = 1;
+		if (intrace.sx >= x_image) flag_s = 1;
+		if (intrace.gx >= x_image) flag_g = 1;
 		if (!flag_s*flag_g)
 		{
 			trace_gxy[2 * ng] = intrace.gx;
@@ -1363,10 +1379,10 @@ main(int argc, char **argv)
 		gy = intrace.gy;
 		if (oldsx == sx && oldsy == sy)
 		{
-			if (intrace.sx >= x0 && intrace.sx <= x1 && intrace.gx >= x0 && intrace.gx <= x1)
+			if (intrace.sx >= x_min && intrace.sx <= x_max && intrace.gx >= x_min && intrace.gx <= x_max)
 			{
-				if (intrace.sx >= xd) flag_s = 1;
-				if (intrace.gx >= xd) flag_g = 1;
+				if (intrace.sx >= x_image) flag_s = 1;
+				if (intrace.gx >= x_image) flag_g = 1;
 				if (!flag_s*flag_g)
 				{
 					trace_gxy[2 * ng] = intrace.gx;
@@ -1397,40 +1413,39 @@ main(int argc, char **argv)
 					if (trace_gxy[2 * i + 1] <= miny)
 						miny = trace_gxy[2 * i + 1];
 				}
-				if (minx<xd && maxx >xd && minx >= x0 && maxx <= x1)
+				if (minx<x_image && maxx >x_image && minx >= x_min && maxx <= x_max)
 				{
+					// start RTM	
                     
 					dobs = alloc1float(nt*ng);
 					memset(dobs, 0, nt*ng * sizeof(float));
 					matrix_transpose(trace, dobs, nt, ng);
 
-					if (oldsx < xb)
+					if (oldsx < x_image)
 					{
 						flag_s = 0;
 						flag_g = 1;
-						nx_s= ((xd - x_beg) / ddx) - ((minx - x_beg) / ddx)+expend;
-						ny_s = ((maxy - y_beg) / ddy) - ((miny - y_beg) / ddy);
+						nx_s= ((x_image - x_beg) / ddx) - ((minx - x_beg) / ddx)+1+expends;
+						ny_s = ((maxy - y_beg) / ddy) - ((miny - y_beg) / ddy)+1;
 						nz_s = nz;
-						nx_g = ((maxx - x_beg) / ddx) - ((xd - x_beg) / ddx) + 6;
-						ny_g = ((maxy - y_beg) / ddy) - ((miny - y_beg) / ddy);
+						nx_g = ((maxx - x_beg) / ddx) - ((x_image - x_beg) / ddx) + 1++expends;
+						ny_g = ((maxy - y_beg) / ddy) - ((miny - y_beg) / ddy)+1;
 						nz_g = nz;
 					}
-					if (oldsx >= xb)
+					if (oldsx >= x_image)
 					{
 						flag_s = 1;
 						flag_g = 0;
-						nx_s = ((maxx - x_beg) / ddx) - ((xd - x_beg) / ddx) + expends;
-						ny_s = ((maxy - y_beg) / ddy) - ((miny - y_beg) / ddy);
+						nx_s = ((maxx - x_beg) / ddx) - ((x_image - x_beg) / ddx) + 1 + expends;
+						ny_s = ((maxy - y_beg) / ddy) - ((miny - y_beg) / ddy) + 1;
 						nz_s = nz;
-						nx_g = ((xd - x_beg) / ddx) - ((minx - x_beg) / ddx) + expends;
-						ny_g = ((maxy - y_beg) / ddy) - ((miny - y_beg) / ddy);
+						nx_g = ((x_image - x_beg) / ddx) - ((minx - x_beg) / ddx) + 1 + expends;
+						ny_g = ((maxy - y_beg) / ddy) - ((miny - y_beg) / ddy) + 1;
 						nz_g = nz;
 					}
 					nx = ((maxx - x_beg) / ddx) - ((minx - x_beg) / ddx);
 					ny = ((maxy - y_beg) / ddy) - ((miny - y_beg) / ddy);
 					warn("Migration shot=%d, ng=%d nx=%d, ny=%d nx_s=%d nx_g=%d\n ", ns, ng, nx, ny,nx_s,nx_g);
-					xr0 = minx;
-					yr0 = miny;
 
 					nzb = nz + 2 * nb;
 					nxb = nx + 2 * nb;
@@ -1439,14 +1454,16 @@ main(int argc, char **argv)
 					nnx = nx + 2 * nbr;
 					nny = ny + 2 * nbr;
 					N = nnx*nny*nnz;
-					N_image = nny*nnz;
+					
+
+
 					nzb_s = nz_s + 2 * nb;
 					nxb_s = nx_s + 2 * nb;
 					nyb_s = ny_s + 2 * nb;
 					nnz_s = nz_s + 2 * nbr;
 					nnx_s = nx_s + 2 * nbr;
 					nny_s = ny_s + 2 * nbr;
-					N_s = nny_s*nnz_s;
+					N_s = nny_s*nnz_s*nnx_s;
 
 					nzb_g = nz_g + 2 * nb;
 					nxb_g = nx_g + 2 * nb;
@@ -1456,6 +1473,8 @@ main(int argc, char **argv)
 					nny_g = ny_g + 2 * nbr;
 					N_g = nnx_g*nny_g*nnz_g;
 
+
+					N_image = nny_s*nnz_s;
 					/*
 					v0 = alloc1float(nz*nx*ny);
 					vv = alloc1float(N);
@@ -1524,7 +1543,7 @@ main(int argc, char **argv)
 					cudaMalloc(&d_szxy, 1 * sizeof(int));
 					cudaMalloc(&d_gzxy, ng * sizeof(int));
 					sf_check_gpu_error("Failed to initialize device memory of wave field!");
-					m_boundary = 2.0 * (nx*ny + nx*nz + ny*nz) * 4;
+					m_boundary = 2.0 * (nx_s*ny_s + nx_s*nz_s + ny_s*nz_s) * 4;
 					nt_d = int(0 * 1024 * 1024 * 1024 / m_boundary);
 					nt_h = int(20.0 * 1024 * 1024 * 1024 / m_boundary);
 					if (nt_d > nt)
@@ -1556,6 +1575,8 @@ main(int argc, char **argv)
 					cudaMemset(disk_boundary, 0, 2 * (nx_s*ny_s + nx_s*nz_s + ny_s*nz_s) * sizeof(float));
 					cudaMemset(d_I1, 0, N_image * sizeof(float));
 					cudaMemset(d_I2, 0, N_image * sizeof(float));
+					cudaMemset(d_Iss, 0, N_image * sizeof(float));
+					cudaMemset(d_Isg, 0, N_image * sizeof(float));
 					sf_check_gpu_error("Failed to allocate memory for variables!");
 					cuda_ricker_wavelet << <(nt + 511) / 512, 512 >> >(d_wlt, fm, dt, nt);
 					cuda_abc << <nbr + 15, 16 >> >(d_abc, nbr);
@@ -1568,36 +1589,43 @@ main(int argc, char **argv)
 					if (flag_s)
 					{
 					  //right shot
-						i_x_s = ((xd - x_beg) / ddx)-expends;    // i_x is related to local velocity model
-						i_y_s = ((miny - y_beg) / ddy);
-						mig_s = (i_x_s - start_line)*nz + i_y_s*nz*(2 * line_range + 1);
-					
+						i_x_s_beg = ((x_image - x_beg) / ddx)-expends;    // i_x is related to local velocity model
+						i_y_s_beg = ((miny - y_beg) / ddy);
+						//mig_s = (i_x_s - start_line)*nz + i_y_s*nz*(2 * line_range + 1);
+						//x_beg + (start_line - 1 - line_range)*ddx;
+						//line_start = start_line - 1 - line_range;
+						mig_s_x = i_x_s_beg - (x_min - x_beg) / ddx;
+						mig_s_y = i_y_s_beg - (y_min - y_beg) / ddx;
 					}
 					else
 					{
 						// left shot
-						i_x_s = ((minx - x_beg) / ddx);    // i_x is related to local velocity model
-						i_y_s = ((miny - y_beg) / ddy);
-						mig_s = (i_x_s - line_start)*nz + i_y_s*nz*(2 * line_range + 1);
-							
+						i_x_s_beg = ((minx - x_beg) / ddx);    // i_x is related to local velocity model
+						i_y_s_beg = ((miny - y_beg) / ddy);
+						//mig_s = (i_x_s - line_start)*nz + i_y_s*nz*(2 * line_range + 1);
+						mig_s_x = i_x_s_beg - (x_min - x_beg) / ddx;
+						mig_s_y = i_y_s_beg - (y_min - y_beg) / ddx;
 					}
 
 					// receiver block
 					if (flag_g)
 					{
 						//right shot
-						i_x_g = ((xd - x_beg) / ddx) - expends;    // i_x is related to local velocity model
-						i_y_g = ((miny - y_beg) / ddy);
-						mig_g = (i_x_g - start_line)*nz + i_y_g*nz*(2 * line_range + 1);
+						i_x_g_beg = ((x_image - x_beg) / ddx) - expends;    // i_x is related to local velocity model
+						i_y_g_beg = ((miny - y_beg) / ddy);
+						mig_g_x = i_x_g_beg - (x_min - x_beg) / ddx;
+						mig_g_y = i_y_g_beg - (y_min - y_beg) / ddx;
+						//mig_g = (i_x_g - start_line)*nz + i_y_g*nz*(2 * line_range + 1);
 
 					}
 					else
 					{
 						// left shot
-						i_x_g = ((minx - x_beg) / ddx);    // i_x is related to local velocity model
-						i_y_g = ((miny - y_beg) / ddy);
-						mig_g = (i_x_g - line_start)*nz + i_y_g*nz*(2 * line_range + 1);
-
+						i_x_g_beg = ((minx - x_beg) / ddx);    // i_x is related to local velocity model
+						i_y_g_beg = ((miny - y_beg) / ddy);
+						//mig_g = (i_x_g - line_start)*nz + i_y_g*nz*(2 * line_range + 1);
+						mig_g_x = i_x_g_beg - (x_min - x_beg) / ddx;
+						mig_g_y = i_y_g_beg - (y_min - y_beg) / ddx;
 					}
 
 					// load velocity of shot block
@@ -1609,7 +1637,7 @@ main(int argc, char **argv)
 								//v0[k + j*nz + i*nz*nx]=2000+k*10;
 								//v0[k + j*nz + i*nz*nx] = 2500 + k * 10;
 								// if( k>170)   v0[k + j*nz + i*nz*nx]=4500;
-								v0_s[k + j*nz_s + i*nz_s*nx_s] = vr(mig_s + k + j*nz + i*nz*(2 * line_range + 1));
+								v0_s[k + j*nz_s + i*nz_s*nx_s] = vr(mig_s_x*nz*ncdp + mig_s_y*nz + k + j*nz*ncdp + i*nz);
 							}
 
 					// load velocity of receiver block
@@ -1621,7 +1649,7 @@ main(int argc, char **argv)
 								//v0[k + j*nz + i*nz*nx]=2000+k*10;
 								//v0[k + j*nz + i*nz*nx] = 2500 + k * 10;
 								// if( k>170)   v0[k + j*nz + i*nz*nx]=4500;
-								v0_g[k + j*nz_g + i*nz_g*nx_g] = vr(mig_g + k + j*nz + i*nz*(2 * line_range + 1));
+								v0_g[k + j*nz_g + i*nz_g*nx_g] = vr(mig_g_x*nz*ncdp + mig_g_y*nz + k + j*nz*ncdp + i*nz);
 							}
 					// extend the velocity
 					extend3d(v0_s, vv_s, nz_s, nx_s, ny_s, nb);
@@ -1634,21 +1662,31 @@ main(int argc, char **argv)
 
 					for (ig = 0; ig < ng; ig++)
 					{
-						index_gx = (trace_gxy[2 * ig] - x_beg) / ddx - i_x_g;
-						index_gy = (trace_gxy[2 * ig + 1] - y_beg) / ddy - i_y_g;
+						index_gx = (trace_gxy[2 * ig] - x_beg) / ddx - i_x_g_beg;
+						index_gy = (trace_gxy[2 * ig + 1] - y_beg) / ddy - i_y_g_beg;
 						index_gz = 2;
-					    index_gx_xd = (xd - x_beg) / ddx - i_x_g;
-						cuda_set_gzxy << <1, 1 >> >(d_gzxy, index_gz, index_gx, index_gy, ig, nz_g, nx_g, ny, nb);
-						index_sx = (oldsx - x_beg) / ddx - i_x_s;
-						index_sy = (oldsy - y_beg) / ddy - i_y_s;
-						index_sx_xd = (xd - x_beg) / ddx - i_x_s;
+						index_gx_image = (x_image - x_beg) / ddx - i_x_g_beg;
+						cuda_set_gzxy << <1, 1 >> >(d_gzxy, index_gz, index_gx, index_gy, ig, nz_g, nx_g, ny_g, nb);
+
+
+						index_sx = (oldsx - x_beg) / ddx - i_x_s_beg;
+						index_sy = (oldsy - y_beg) / ddy - i_y_s_beg;
+						index_sx_image = (x_image - x_beg) / ddx - i_x_s_beg;
 						index_sz = 1
 							//index_sx = 150;
 							//index_sy = 150;
 					}
-					warn("index_sx=%d  index_sy=%d  index_gx=%d index_gy= %d \n", ns, index_sx, index_sy, index_gx, index_gy);
+					warn("index_sx=%d  index_sy=%d  index_sx_image=%d index_gx_image= %d \n", ns, index_sx, index_sy, index_sx_image, index_gx_image);
 
-
+					nt_image=(int)(1.0*abs(oldsx - x_image) / vmute) - 100;
+					if (nt_image > nt) 
+					{
+						warn("nt_image error =%d \n", nt_image);
+					}
+					else
+					{
+						warn("nt_image =%d \n", nt_image);
+					}
 					cuda_set_szxy << <1, 1 >> >(d_szxy, index_sz, index_sx, index_sy, 0, nz_s, nx_s, ny_s, nb);
 					//matrix_transpose(transp, dobs, nt, ng);
 
@@ -1674,9 +1712,20 @@ main(int argc, char **argv)
 
 						ptr = d_p0; d_p0 = d_p1; d_p1 = ptr;
 
-						//cuda_record << <(ng + 255) / 256, 256 >> >(d_p0, d_dobs, d_gzxy, ng);
-						//cuda_mute << <dimgtb2, dimb >> >(d_dobs, &d_szxy[is], d_gzxy, it, 130, 2600, dt, dz, dx, dy, nz, nx, ny, nb, ng, 1);
-						//cudaMemcpy(&dobs[it*ng], d_dobs, ng * sizeof(float), cudaMemcpyDeviceToHost);
+						if (slice && it % 100 == 0)
+						{
+							//cuda_record << <(ng + 255) / 256, 256 >> >(d_p0, d_dobs, d_gzxy, ng);
+							//cuda_mute << <dimgtb2, dimb >> >(d_dobs, &d_szxy[is], d_gzxy, it, 130, 2600, dt, dz, dx, dy, nz, nx, ny, nb, ng, 1);
+							//cudaMemcpy(&dobs[it*ng], d_dobs, ng * sizeof(float), cudaMemcpyDeviceToHost);
+							cudaMemcpy(vv_s, d_p0, nnz_s*nnx_s*nny_s * sizeof(float), cudaMemcpyDeviceToHost);
+							window3d(v0_s, vv_s, nz_s, nx_s, ny_s, nb)
+							for(i=0;i<ncdp;i++)
+								for (j = 0; j < nz_s; j++)
+								{
+									v_slice[j + i*nz_s] = v0_s[j+i*nz_s*nx_s];
+								}
+							fwrite(v_slice, sizeof(float), ncdp*nz, fp_forward);
+						}
 						if (it<nt_h) cudaHostGetDevicePointer(&ptr, &h_boundary[it * 2 * (nx_s*ny_s + ny_s*nz_s + nz_s*nx_s)], 0);
 						if (it >= nt_h && it<nt_h + nt_d) ptr = &d_boundary[(it - nt_h) * 2 * (nx_s*ny_s + nx_s*nz_s + ny_s*nz_s)];
 						if (it >= nt_h + nt_d && it < nt)
@@ -1716,9 +1765,10 @@ main(int argc, char **argv)
 					//cudaMemcpy(transp, d_dobs, nt*ng * sizeof(float), cudaMemcpyDeviceToHost);
 					//matrix_transpose(dobs, transp, ng, nt);
 					fwrite(dobs, sizeof(float), nt*ng, fp_r);
-
-					for (it = nt - 1; it>-1; it--)
+					ktt = 0;
+					for (it = nt - 1; it>nt_image; it--)
 					{
+						ktt++;
 						if (it<nt_h) cudaHostGetDevicePointer(&ptr, &h_boundary[it * 2 * (nx_s*ny_s + ny_s*nz_s + nz_s*nx_s)], 0);
 						if (it >= nt_h && it<nt_h + nt_d)  ptr = &d_boundary[(it - nt_h) * 2 * (nx_s*ny_s + nx_s*nz_s + ny_s*nz_s)];
 						if (it >= nt_h + nt_d && it < nt)
@@ -1749,6 +1799,21 @@ main(int argc, char **argv)
 						apply_sponge_fr << <dimgfr_g, dimb_g >> >(d_gp1, d_abc, nz_g, nx_g, ny_g, nb);
 
 						ptr = d_gp0; d_gp0 = d_gp1; d_gp1 = ptr;
+						
+						if (slice && it % 100 == 0)
+						{
+							//cuda_record << <(ng + 255) / 256, 256 >> >(d_p0, d_dobs, d_gzxy, ng);
+							//cuda_mute << <dimgtb2, dimb >> >(d_dobs, &d_szxy[is], d_gzxy, it, 130, 2600, dt, dz, dx, dy, nz, nx, ny, nb, ng, 1);
+							//cudaMemcpy(&dobs[it*ng], d_dobs, ng * sizeof(float), cudaMemcpyDeviceToHost);
+							cudaMemcpy(vv_s, d_gp0, nnz_s*nnx_s*nny_s * sizeof(float), cudaMemcpyDeviceToHost);
+							window3d(v0_s, vv_s, nz_s, nx_s, ny_s, nb)
+								for (i = 0; i<ncdp; i++)
+									for (j = 0; j < nz_s; j++)
+									{
+										v_slice[j + i*nz_s] = v0_s[j + i*nz_s*nx_s];
+									}
+							fwrite(v_slice, sizeof(float), ncdp*nz, fp_back);
+						}
 						/*
 						if (it >nt / 12 * 7 && it % 30 == 0)
 						{
@@ -1770,10 +1835,10 @@ main(int argc, char **argv)
 						}
 						*/
 
-						if (it > nt / 12 * 7)
+						if (ktt >(nt-nt_image)-200 )
 						{
 							//cuda_cross_correlate << <dimgfr, dimb >> >(d_Isg, d_Iss, d_p0, d_gp0, nz, nx, ny, nb);
-							cuda_cross_correlate_oneinlin<<<dimglr_g , dimb_g >>>(d_Isg, d_Iss, d_p0, d_gp0, nz_s, nx_s, ny_s, nz_g, nx_g, ny_g, index_sx_xd, index_gx_xd, nb);
+							cuda_cross_correlate_oneinlin<<<dimglr_g , dimb_g >>>(d_Isg, d_Iss, d_p0, d_gp0, nz_s, nx_s, ny_s, nz_g, nx_g, ny_g, index_sx_image, index_gx_image, nb);
 						}
 							
 						if (it % 100 == 0)
@@ -1785,10 +1850,10 @@ main(int argc, char **argv)
 					//cuda_imaging22 << <dimgfr, dimb >> >(d_Isg, d_Iss, d_p0, d_gp0, nz, nx, ny, nb);
 					//cuda_laplace_filter3d << <dimgfr, dimb >> >(d_p0, d_Isg, 1. / dz, 1. / dx, 1. / dy, nz, nx, ny, nb);
 					
-					cuda_imaging_oneinlin << <dimglr_g, dimb_g >> >(d_Isg, d_Iss, d_I1, d_I2, nz_s, nx_s, ny_s, nz_g, nx_g, ny_g, index_sx_xd, index_gx_xd, nb);
+					cuda_imaging_oneinlin << <dimglr_g, dimb_g >> >(d_Isg, d_Iss, d_I1, d_I2, nz_s, nx_s, ny_s, nz_g, nx_g, ny_g, index_sx_image, index_gx_image, nb);
 					cuda_laplace_filter2d(d_I1, d_Isg,  1./dz,  1./dx, nbr, nnz_s, nny_s)
-					cudaMemcpy(v0_s, d_Isg, nnz_s*nny_s * sizeof(float), cudaMemcpyDeviceToHost);
-					window2d(v0_g, v0_s, nz_s, ny_s, ny_s, nb);
+					cudaMemcpy(v_slice, d_Isg, nnz_s*nny_s * sizeof(float), cudaMemcpyDeviceToHost);
+					window2d(v0_s, v_slice, nz_s, ny_s, nb);
 					
 					
     				cudaEventRecord(stop);
@@ -1807,10 +1872,10 @@ main(int argc, char **argv)
 							efwrite(&intrace, HDRBYTES, 1, hfp);
 							erewind(hfp);
 							efwrite(&outtrace, HDRBYTES, 1, hfp);
-							outtrace.sx = xd;
-							outtrace.sy = miny + i*dx;
-							outtrace.cdp = miny/ddy+i;
-							outtrace.fldr = xd / ddx;
+							outtrace.sx = x_image;
+							outtrace.sy = miny + i*ddy;
+							outtrace.cdp = i_y_s_beg+i;
+							outtrace.fldr = i_x_image;
 							for (k = 0; k < nz; k++)
 							{
 								outtrace.data[k] = v0_g[k+i*nz_s];
@@ -1820,7 +1885,7 @@ main(int argc, char **argv)
 
 							puttr(&outtrace);
 						}
-				}// if 
+				}// if zone
 			
 			
 
@@ -1835,17 +1900,17 @@ main(int argc, char **argv)
 			memset(trace, 0, nt*ntr * sizeof(float));
 			memset(trace_gxy, 0, 2 * ntr * sizeof(int));
 			ns++;
-			//ng = 1;
+			ng = 0;
 			oldsx = sx;
 			oldsy = sy;
 			minx = oldsx;
 			maxx = oldsx;
 			miny = oldsy;
 			maxy = oldsy;
-			if (intrace.sx >= x0 && intrace.sx <= x1 && intrace.gx >= x0 && intrace.gx <= x1)
+			if (intrace.sx >= x_min && intrace.sx <= x_max && intrace.gx >= x_min && intrace.gx <= x_max)
 			{
-				if (intrace.sx >= xd) flag_s = 1;
-				if (intrace.gx >= xd) flag_g = 1;
+				if (intrace.sx >= x_image) flag_s = 1;
+				if (intrace.gx >= x_image) flag_g = 1;
 				if (!flag_s*flag_g)
 				{
 					trace_gxy[2 * ng] = intrace.gx;
