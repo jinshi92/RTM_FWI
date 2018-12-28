@@ -619,7 +619,7 @@ __global__ void cuda_cross_correlate_oneinlin(float *Isg, float *Iss, float *sp,
 	int i3 = threadIdx.y + blockDim.y*blockIdx.y;
 
 
-	int nbr, nn1_s, nn2_s, nn3_s, nn1_g, nn2_g, nn3_g, i, NN_s, NN_g, i3;
+	int nbr, nn1_s, nn2_s, nn3_s, nn1_g, nn2_g, nn3_g, i, NN_s, NN_g;
 	nbr = nb + radius;
 	nn1_s = nz_s + 2 * nbr;
 	nn2_s = nx_s + 2 * nbr;
@@ -758,7 +758,7 @@ __global__ void cuda_imaging_oneinlin(float *Isg, float *Iss, float *I1, float *
 	int i3 = threadIdx.y + blockDim.y*blockIdx.y;
 
 
-	int nbr, nn1_s, nn2_s, nn3_s, nn1_g, nn2_g, nn3_g, i, NN_s, NN_g, i3;
+	int nbr, nn1_s, nn2_s, nn3_s, nn1_g, nn2_g, nn3_g, i, NN_s, NN_g;
 	nbr = nb + radius;
 	nn1_s = nz_s + 2 * nbr;
 	nn2_s = nx_s + 2 * nbr;
@@ -1050,7 +1050,7 @@ __global__ void cuda_taper3(float *I1, float *I2, int gx, int gy, int length, in
 __global__ void cuda_laplace_filter2d(float *Img, float *laplace, float _dz, float _dy, int nb, int nz, int ny)
 {
 	
-	int nbr, nn1, nn2, nn3, i, NN, i3;
+	int nbr, nn1, nn2, nn3, i, NN;
 	nbr = nb + radius;
 	nn1 = nz + 2 * nbr;
 	nn3 = ny + 2 * nbr;
@@ -1290,12 +1290,12 @@ main(int argc, char **argv)
 
 	x_max = x_beg + (start_line - 1 + line_range)*ddx;
 	line_last = start_line - 1 + line_range;
-	if ((start_line - 1 + line_range) >= nline)
+	if ((start_line - 1 + line_range) >= ninline)
 	{
-		x_max = x_beg + (nline - 1)*ddx;
-		line_last = nline - 1;
+		x_max = x_beg + (ninline - 1)*ddx;
+		line_last = ninline - 1;
 	}
-	y_max = y_beg + （ncdp - 1）*ddy;
+	y_max = y_beg + (ncdp - 1)* ddy;
 
 	x_image = x_beg + (start_line - 1)*ddx;
 	i_x_image = (start_line);
@@ -1444,7 +1444,7 @@ main(int argc, char **argv)
 						nx_s = ((x_image - x_beg) / ddx) - ((minx - x_beg) / ddx) + 1 + expends;
 						ny_s = ((maxy - y_beg) / ddy) - ((miny - y_beg) / ddy) + 1;
 						nz_s = nz;
-						nx_g = ((maxx - x_beg) / ddx) - ((x_image - x_beg) / ddx) + 1++expends;
+						nx_g = ((maxx - x_beg) / ddx) - ((x_image - x_beg) / ddx) + 1+expends;
 						ny_g = ((maxy - y_beg) / ddy) - ((miny - y_beg) / ddy) + 1;
 						nz_g = nz;
 					}
@@ -1653,7 +1653,7 @@ main(int argc, char **argv)
 								//v0[k + j*nz + i*nz*nx]=2000+k*10;
 								//v0[k + j*nz + i*nz*nx] = 2500 + k * 10;
 								// if( k>170)   v0[k + j*nz + i*nz*nx]=4500;
-								v0_s[k + j*nz_s + i*nz_s*nx_s] = vr(mig_s_x*nz*ncdp + mig_s_y*nz + k + j*nz*ncdp + i*nz);
+								v0_s[k + j*nz_s + i*nz_s*nx_s] = vr[mig_s_x*nz*ncdp + mig_s_y*nz + k + j*nz*ncdp + i*nz];
 							}
 
 					// load velocity of receiver block
@@ -1665,7 +1665,7 @@ main(int argc, char **argv)
 								//v0[k + j*nz + i*nz*nx]=2000+k*10;
 								//v0[k + j*nz + i*nz*nx] = 2500 + k * 10;
 								// if( k>170)   v0[k + j*nz + i*nz*nx]=4500;
-								v0_g[k + j*nz_g + i*nz_g*nx_g] = vr(mig_g_x*nz*ncdp + mig_g_y*nz + k + j*nz*ncdp + i*nz);
+								v0_g[k + j*nz_g + i*nz_g*nx_g] = vr[mig_g_x*nz*ncdp + mig_g_y*nz + k + j*nz*ncdp + i*nz];
 							}
 					// extend the velocity
 					extend3d(v0_s, vv_s, nz_s, nx_s, ny_s, nb);
@@ -1688,7 +1688,7 @@ main(int argc, char **argv)
 						index_sx = (oldsx - x_beg) / ddx - i_x_s_beg;
 						index_sy = (oldsy - y_beg) / ddy - i_y_s_beg;
 						index_sx_image = (x_image - x_beg) / ddx - i_x_s_beg;
-						index_sz = 1
+						index_sz = 1;
 							//index_sx = 150;
 							//index_sy = 150;
 					}
@@ -1734,8 +1734,8 @@ main(int argc, char **argv)
 							//cuda_mute << <dimgtb2, dimb >> >(d_dobs, &d_szxy[is], d_gzxy, it, 130, 2600, dt, dz, dx, dy, nz, nx, ny, nb, ng, 1);
 							//cudaMemcpy(&dobs[it*ng], d_dobs, ng * sizeof(float), cudaMemcpyDeviceToHost);
 							cudaMemcpy(vv_s, d_p0, nnz_s*nnx_s*nny_s * sizeof(float), cudaMemcpyDeviceToHost);
-							window3d(v0_s, vv_s, nz_s, nx_s, ny_s, nb)
-								for (i = 0; i<ncdp; i++)
+							window3d(v0_s, vv_s, nz_s, nx_s, ny_s, nb);
+								for(i = 0; i<ncdp; i++)
 									for (j = 0; j < nz_s; j++)
 									{
 										v_slice[j + i*nz_s] = v0_s[j + i*nz_s*nx_s];
@@ -1822,7 +1822,7 @@ main(int argc, char **argv)
 							//cuda_mute << <dimgtb2, dimb >> >(d_dobs, &d_szxy[is], d_gzxy, it, 130, 2600, dt, dz, dx, dy, nz, nx, ny, nb, ng, 1);
 							//cudaMemcpy(&dobs[it*ng], d_dobs, ng * sizeof(float), cudaMemcpyDeviceToHost);
 							cudaMemcpy(vv_s, d_gp0, nnz_s*nnx_s*nny_s * sizeof(float), cudaMemcpyDeviceToHost);
-							window3d(v0_s, vv_s, nz_s, nx_s, ny_s, nb)
+							window3d(v0_s, vv_s, nz_s, nx_s, ny_s, nb);
 								for (i = 0; i<ncdp; i++)
 									for (j = 0; j < nz_s; j++)
 									{
@@ -1903,16 +1903,55 @@ main(int argc, char **argv)
 						puttr(&outtrace);
 					}
 				}// if zone
+				else
+				{
+					warn(" skip shots ! sx=%d sy=%d   \n ",sx,sy);
+				}
+				/*
+				cudaHostAlloc(&h_boundary, nt_h * 2 * (nx_s*ny_s + nx_s*nz_s + ny_s*nz_s) * sizeof(float), cudaHostAllocMapped);
+				cudaHostAlloc(&disk_boundary, 2 * (nx_s*ny_s + nx_s*nz_s + ny_s*nz_s) * sizeof(float), cudaHostAllocMapped);
+				cudaMalloc(&d_boundary, (nt_d) * 2 * (nx_s*ny_s + nx_s*nz_s + ny_s*nz_s) * sizeof(float));
+				cudaMalloc(&d_abc, nbr * sizeof(float));
+				cudaMalloc(&d_wlt, nt * sizeof(float));
+				cudaMalloc(&d_vv_s, nnz_s*nnx_s*nny_s * sizeof(float));
+				cudaMalloc(&d_vv_g, nnz_g*nnx_g*nny_g * sizeof(float));
+				cudaMalloc(&d_p0, nnz_s*nnx_s*nny_s * sizeof(float));
+				cudaMalloc(&d_p1, nnz_s*nnx_s*nny_s * sizeof(float));
+				cudaMalloc(&d_gp0, nnz_g*nnx_g*nny_g * sizeof(float));
+				cudaMalloc(&d_gp1, nnz_g*nnx_g*nny_g * sizeof(float));
+				cudaMalloc(&d_Iss, N_image * sizeof(float));
+				cudaMalloc(&d_Isg, N_image * sizeof(float));
+				cudaMalloc(&d_I1, N_image * sizeof(float));
+				cudaMalloc(&d_I2, N_image * sizeof(float));
+				cudaMalloc(&d_dobs, ng * sizeof(float));
+				cudaMalloc(&d_szxy, 1 * sizeof(int));
+				cudaMalloc(&d_gzxy, ng * sizeof(int));
+				*/
+				cudaFree(d_gzxy);
+				cudaFree(d_szxy);
+				cudaFree(d_dobs);
+				cudaFree(d_I2);
+				cudaFree(d_I1);
+				cudaFree(d_Isg);
+				cudaFree(d_Iss);
+				cudaFree(d_gp1);
+				cudaFree(d_gp0);
+				cudaFree(d_p1);
+				cudaFree(d_p0);
+				cudaFree(d_vv_g);
+				cudaFree(d_vv_s);
+				cudaFree(d_wlt);
+				cudaFree(d_abc);
+				cudaFree(d_boundary);
+				cudaFreeHost(h_boundary);
 
-
-
-
-
-
+				free(disk_boundary);
+				free(v0_s);
+				free(dobs);
+				free(vv_s);
+				free(vv_g);
+				free(v0_g);
 			} // if ns>20
-
-
-
 			  ///////////////////////////////////////////End of RTM and set  trace array to zero///////////////////////////////////////////////////////
 			memset(trace, 0, nt*ntr * sizeof(float));
 			memset(trace_gxy, 0, 2 * ntr * sizeof(int));
@@ -1938,7 +1977,6 @@ main(int argc, char **argv)
 					}
 					ng = 1;
 				}
-
 			}
 			/*
 			if (intrace.sx >= x0 && intrace.sx <= x1 && intrace.gx >= x0 && intrace.gx <= x1)
@@ -1992,12 +2030,10 @@ main(int argc, char **argv)
 			trace_gxy[2 * ng + 1] = intrace.gy;
 			ng++;
 			*/
+
 		}
-
 	} while (gettr(&intrace) && ns <= nss);
-
 	warn(" success !  \n ");
-
 	checkpars();
 	return(CWP_Exit());
 }
