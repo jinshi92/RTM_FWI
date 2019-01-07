@@ -1,6 +1,6 @@
 /* Prestack time migration (2-D/3-D) CUDA kernel. */
 /*
-Copyright (C) 2010 University of Texas at Austin
+Copyright (C) 2019 Chinese Academy of Science, Guiting Chen
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -414,7 +414,7 @@ int main(int argc, char* argv[]) {
 	int *ap;
 	/* Coordinates: shot, receiver, and midpoint */
 
-	int star_line, nline, ncdp;
+	int star_line, nline, ncdp, all_line,id;
 	char *vrmsfile, *imgfile;
 	//sf_file data, image, vrms, sxsy, gxgy, cxcy;
 	FILE *fp_vfile=NULL;
@@ -422,10 +422,12 @@ int main(int argc, char* argv[]) {
 	initargs(argc, argv);
 	requestdoc(0);
 
+	if (!getparint("id", &id)) err("can't get id");
+	if (!getparint("all_line", &all_line)) err("can't get all_line");
 	if (!getparint("ncdp", &ncdp)) err("can't get ncdp");
-	if (!getparint("ncdp", &nline)) err("can't get nline");
-	if (!getparfloat("fm", &odx)) err("can't get odx in celocity");
-	if (!getparfloat("fm", &ody)) err("can't get dy in velocity");
+	if (!getparint("nline", &nline)) err("can't get nline");
+	if (!getparfloat("dx", &odx)) err("can't get odx in celocity");
+	if (!getparfloat("dy", &ody)) err("can't get dy in velocity");
 	if (!getparfloat("x_beg", &oox)) err("can't get oox in celocity");
 	if (!getparfloat("y_beg", &ooy)) err("can't get ooy in velocity");
 	if (!getparstring("vfile", &vrmsfile)) { warn("error infile vrm"); }
@@ -461,7 +463,7 @@ int main(int argc, char* argv[]) {
 	if (!getparint("diff", &diff)) diff = 1;
 	/* Differentiation flag */
 
-	cudaSetDevice(0);
+	cudaSetDevice(id);
 	sf_check_gpu_error("Device initialization");
 	cudaGetDeviceCount(&devcnt);
 	
@@ -670,6 +672,16 @@ int main(int argc, char* argv[]) {
 	/* Loop over input traces */
 	i = 0;
 	int kttr = 0;
+	for (i = 0; i < nt; i++)
+		t[kttr*nt + i] = intrace.data[i];
+
+	sxy[kttr].x = intrace.sx;
+	sxy[kttr].y = intrace.sy;
+	gxy[kttr].x = intrace.gx;
+	gxy[kttr].y = intrace.gy;
+	cxy[kttr].x = (intrace.gx + intrace.sx) / 2;
+	cxy[kttr].y = (intrace.gy + intrace.sy) / 2;
+	kttr++;
 	do
 	{
 		
@@ -689,6 +701,18 @@ int main(int argc, char* argv[]) {
 		else
 		{
 			kttr = 0;
+			for (i = 0; i < nt; i++)
+				t[kttr*nt + i] = intrace.data[i];
+
+			sxy[kttr].x = intrace.sx;
+			sxy[kttr].y = intrace.sy;
+			gxy[kttr].x = intrace.gx;
+			gxy[kttr].y = intrace.gy;
+			cxy[kttr].x = (intrace.gx + intrace.sx) / 2;
+			cxy[kttr].y = (intrace.gy + intrace.sy) / 2;
+			kttr++;
+
+
 			k = btr;
 			/* Find CDP span */
 			minix = onx - 1; maxix = 0;
